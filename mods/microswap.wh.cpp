@@ -1,6 +1,6 @@
 // ==WindhawkMod==
-// @id              micswap
-// @name            MicSwap
+// @id              microswap
+// @name            MicroSwap
 // @description     Adds a tray icon to instantly toggle between two preferred audio inputs (microphones).
 // @version         1.0.0
 // @author          BlackPaw
