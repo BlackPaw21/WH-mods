@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              audioswap
 // @name            AudioSwap
-// @description     Tray icon to cycle between multiple preferred audio outputs. Supports up to 6 devices with click or scroll to swap.
+// @description     Adds a tray icon to instantly toggle between 2 or more preferred audio outputs.
 // @version         1.3.0
 // @author          BlackPaw
 // @github          https://github.com/BlackPaw21
@@ -42,9 +42,8 @@ Instantly cycle between multiple audio output devices from your system tray — 
 ## Changelog
 
 ### v1.3.0
-- Select a mode in the Windhawk settings: Click / Scroll
 - Up to 6 devices; scroll-to-swap mode; dynamic right-click menu.
-- Left-click mutes in scroll mode; black dot overlay on tray icon.
+- Left-click mutes in scroll mode; red dot overlay on tray icon.
 - Cycling auto-unmutes previous device.
 - Inactive/disconnected devices skipped when cycling.
 - Mute state persisted across mod restarts.
