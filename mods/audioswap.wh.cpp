@@ -1,12 +1,12 @@
 // ==WindhawkMod==
 // @id              audioswap
 // @name            AudioSwap
-// @description     Adds a tray icon to instantly toggle between 2 or more preferred audio outputs.
+// @description     Tray icon to cycle between multiple preferred audio outputs. Supports up to 6 devices with click or scroll to swap.
 // @version         1.3.0
 // @author          BlackPaw
 // @github          https://github.com/BlackPaw21
 // @include         windhawk.exe
-// @compilerOptions -lshell32 -lgdi32 -luser32 -lole32 -luuid -loleaut32
+// @compilerOptions -lshell32 -lgdi32 -luser32 -lole32 -luuid -loleaut32 -DUNICODE -D_UNICODE
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -35,7 +35,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
 
 ## Known Bugs
 
-- **Scroll to Swap may not respond while the Windhawk window has focus.** This is a limitation of the low-level mouse hook when another application owns keyboard/mouse focus. Switch focus away from Windhawk and scrolling will work normally.
+- **Scroll to Swap may not respond over elevated windows.** such as Task Manager or other admin-elevated applications. Switch focus away from an elevated window and scrolling will work normally.
 
 ---
 
@@ -182,6 +182,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
 #define WM_TRAY_CALLBACK     (WM_USER + 1)
 #define WM_UPDATE_TRAY_STATE (WM_USER + 2)
 #define WM_TRAY_SCROLL       (WM_USER + 3)  // wParam = direction (+1 or -1)
+#define WM_UPDATE_HOOK_STATE (WM_USER + 4)
 
 // Slot N uses menu IDs: N*100 + device_index (0..31). Max slot 6 → ID 631.
 #define MENU_SLOT_BASE     100
@@ -584,9 +585,23 @@ static HICON CreateMutedOverlayIcon(HICON hBase) {
     HDC hScreen = GetDC(nullptr);
     if (!hScreen) return nullptr;
 
-    HDC     hColorDC  = CreateCompatibleDC(hScreen);
-    HBITMAP hColor    = CreateCompatibleBitmap(hScreen, SZ, SZ);
+    // 32bpp DIBSECTION so we can fix the alpha channel post-GDI.
+    // GDI's Ellipse sets RGB but leaves alpha = 0; CreateIconIndirect
+    // uses the alpha channel for 32bpp color bitmaps, making the dot
+    // invisible without this fixup.
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth       = SZ;
+    bmi.bmiHeader.biHeight      = -SZ;
+    bmi.bmiHeader.biPlanes      = 1;
+    bmi.bmiHeader.biBitCount    = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* pBits = nullptr;
+    HBITMAP hColor = CreateDIBSection(hScreen, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
+    HDC hColorDC = CreateCompatibleDC(hScreen);
     HBITMAP hOldColor = (HBITMAP)SelectObject(hColorDC, hColor);
+    memset(pBits, 0, SZ * SZ * 4);
 
     HDC     hMaskDC   = CreateCompatibleDC(hScreen);
     HBITMAP hMask     = CreateBitmap(SZ, SZ, 1, 1, nullptr);
@@ -596,8 +611,8 @@ static HICON CreateMutedOverlayIcon(HICON hBase) {
     DrawIconEx(hColorDC, 0, 0, hBase, SZ, SZ, 0, nullptr, DI_NORMAL);
     DrawIconEx(hMaskDC,  0, 0, hBase, SZ, SZ, 0, nullptr, DI_MASK);
 
-    const int D  = 10;
-    const int MG = 2;
+    const int D  = 20;
+    const int MG = 1;
     const int X  = SZ - D - MG;
     const int Y  = SZ - D - MG;
 
@@ -608,7 +623,7 @@ static HICON CreateMutedOverlayIcon(HICON hBase) {
     HBRUSH hWhite = CreateSolidBrush(RGB(255, 255, 255));
     SelectObject(hColorDC, hWhite);
     Ellipse(hColorDC, X - 1, Y - 1, X + D + 2, Y + D + 2);
-    SelectObject(hMaskDC, GetStockObject(BLACK_BRUSH));
+    SelectObject(hMaskDC, GetStockObject(WHITE_BRUSH));
     Ellipse(hMaskDC,  X - 1, Y - 1, X + D + 2, Y + D + 2);
     DeleteObject(hWhite);
 
@@ -616,6 +631,22 @@ static HICON CreateMutedOverlayIcon(HICON hBase) {
     SelectObject(hColorDC, hRed);
     Ellipse(hColorDC, X, Y, X + D, Y + D);
     DeleteObject(hRed);
+
+    // GDI drew RGB pixels with alpha = 0 — stamp alpha = 255 over the
+    // overlay dot region so it is actually visible on 32bpp icons.
+    {
+        int y0 = Y - 2; if (y0 < 0) y0 = 0;
+        int y1 = Y + D + 3; if (y1 > SZ) y1 = SZ;
+        int x0 = X - 2; if (x0 < 0) x0 = 0;
+        int x1 = X + D + 3; if (x1 > SZ) x1 = SZ;
+        DWORD* pixels = (DWORD*)pBits;
+        for (int y = y0; y < y1; y++)
+            for (int x = x0; x < x1; x++) {
+                DWORD pixel = pixels[y * SZ + x];
+                if (pixel & 0x00FFFFFF)
+                    pixels[y * SZ + x] = pixel | 0xFF000000;
+            }
+    }
 
     SelectObject(hColorDC, hOldColor);
     SelectObject(hMaskDC,  hOldMask);
@@ -1005,15 +1036,23 @@ LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             SpawnCycleThread(direction);
         }
 
-    } else if (msg == WM_UPDATE_TRAY_STATE || (msg == WM_TIMER && wParam == 1)) {
+    } else if (msg == WM_UPDATE_TRAY_STATE) {
         UpdateTrayTip(hWnd, FALSE);
+
+    } else if (msg == WM_UPDATE_HOOK_STATE) {
+        LONG isScroll = InterlockedCompareExchange(&g_scrollToSwap, 0, 0);
+        if (isScroll && !g_mouseHook) {
+            g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0);
+        } else if (!isScroll && g_mouseHook) {
+            UnhookWindowsHookEx(g_mouseHook);
+            g_mouseHook = nullptr;
+        }
 
     } else if (msg == g_taskbarCreatedMsg && g_taskbarCreatedMsg != 0) {
         UpdateTrayTip(hWnd, TRUE);  // re-add icon after explorer restart
 
     } else if (msg == WM_CLOSE) {
-        // Orderly shutdown: kill timer, remove tray icon, then destroy window.
-        KillTimer(hWnd, 1);
+        // Orderly shutdown: remove tray icon, then destroy window.
         NOTIFYICONDATAW nid = {sizeof(nid)};
         nid.hWnd = hWnd;
         nid.uID  = TRAY_ICON_ID;
@@ -1040,9 +1079,21 @@ DWORD WINAPI TrayThreadProc(LPVOID) {
     wc.lpszClassName = L"AudioSwitcherWindowClass";
     RegisterClassW(&wc);
 
-    // HWND_MESSAGE parent: proper message-only window, invisible to Alt+Tab / taskbar.
-    g_trayHwnd = CreateWindowExW(0, wc.lpszClassName, L"Audio Switcher", 0,
-                                  0, 0, 0, 0, HWND_MESSAGE, nullptr, g_hInstance, nullptr);
+    // WS_EX_TOOLWINDOW: hidden popup window that Shell_NotifyIconW can track properly.
+    // AudioSwap used HWND_MESSAGE originally, but message-only windows can lose their
+    // tray icon after reboot because the shell cannot reliably associate the icon with
+    // the window across session boundaries.
+    g_trayHwnd = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        wc.lpszClassName, L"Audio Switcher",
+        WS_POPUP,
+        0, 0, 1, 1,
+        nullptr, nullptr, g_hInstance, nullptr
+    );
+    if (!g_trayHwnd) {
+        CoUninitialize();
+        return 1;
+    }
 
     // Set a unique AUMID so the OS doesn't group this with the main Windhawk icon.
     IPropertyStore* pps = nullptr;
@@ -1067,10 +1118,11 @@ DWORD WINAPI TrayThreadProc(LPVOID) {
         g_notifEnum->RegisterEndpointNotificationCallback(g_deviceNotifier);
     }
 
-    // Global mouse hook for scroll-to-swap (always installed; mode checked in proc).
-    g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0);
+    // Global mouse hook for scroll-to-swap (only installed in scroll mode).
+    if (InterlockedCompareExchange(&g_scrollToSwap, 0, 0) == 1) {
+        g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, g_hInstance, 0);
+    }
 
-    SetTimer(g_trayHwnd, 1, 1500, nullptr);
     UpdateTrayTip(g_trayHwnd, TRUE);
 
     MSG msg;
@@ -1143,13 +1195,15 @@ void WhTool_ModSettingsChanged() {
     LoadDeviceSelections();
     HWND hwnd = g_trayHwnd;
     if (hwnd) PostMessageW(hwnd, WM_UPDATE_TRAY_STATE, 0, 0);
+    HWND hwndHook = g_trayHwnd;
+    if (hwndHook) PostMessageW(hwndHook, WM_UPDATE_HOOK_STATE, 0, 0);
 }
 
 void WhTool_ModUninit() {
     Wh_Log(L"AudioSwap Mod Uninit");
     RestoreMuteExternal();
 
-    // Send WM_CLOSE so TrayWndProc can kill the timer and delete the tray icon
+    // Send WM_CLOSE so TrayWndProc can delete the tray icon
     // cleanly before DestroyWindow → PostQuitMessage exits the message loop.
     HWND hwnd = g_trayHwnd;
     if (hwnd) PostMessageW(hwnd, WM_CLOSE, 0, 0);
@@ -1163,8 +1217,7 @@ void WhTool_ModUninit() {
         CloseHandle(g_workerThread);
         g_workerThread = nullptr;
     }
-    // Safety nets — normally cleaned up inside TrayThreadProc.
-    if (g_mouseHook)   { UnhookWindowsHookEx(g_mouseHook);  g_mouseHook = nullptr; }
+    if (g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = nullptr; }
     if (g_notifEnum && g_deviceNotifier) {
         g_notifEnum->UnregisterEndpointNotificationCallback(g_deviceNotifier);
         g_deviceNotifier->Release(); g_deviceNotifier = nullptr;
