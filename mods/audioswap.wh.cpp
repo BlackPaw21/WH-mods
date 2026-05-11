@@ -6,7 +6,7 @@
 // @author          BlackPaw
 // @github          https://github.com/BlackPaw21
 // @include         windhawk.exe
-// @compilerOptions -lshell32 -lgdi32 -luser32 -lole32 -luuid -loleaut32 -DUNICODE -D_UNICODE
+// @compilerOptions -lshell32 -lgdi32 -luser32 -lole32 -luuid -loleaut32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -35,7 +35,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
 
 ## Known Bugs
 
-- **Scroll to Swap may not respond over elevated windows.** such as Task Manager or other admin-elevated applications. Switch focus away from an elevated window and scrolling will work normally.
+- **Scroll to Swap may not respond over elevated windows.** such as **Task Manager**, **Windhawk** or other admin-elevated applications. Switch focus away from an elevated window and scrolling will work normally.
 
 ---
 
@@ -1145,8 +1145,8 @@ BOOL WhTool_ModInit() {
     Wh_Log(L"AudioSwap Mod Init");
     InitializeCriticalSection(&g_stateLock);
 
-    g_hInstance = GetModuleHandle(nullptr);
-    GetModuleFileName(nullptr, g_windhawkPath, ARRAYSIZE(g_windhawkPath));
+    g_hInstance = GetModuleHandleW(nullptr);
+    GetModuleFileNameW(nullptr, g_windhawkPath, ARRAYSIZE(g_windhawkPath));
 
     // Build the full system32 path for ddores.dll.
     UINT sysLen = GetSystemDirectoryW(g_ddoresDllPath, MAX_PATH);
@@ -1266,7 +1266,7 @@ BOOL Wh_ModInit() {
     bool isToolModProcess = false;
     bool isCurrentToolModProcess = false;
     int argc;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!argv) {
         Wh_Log(L"CommandLineToArgvW failed");
         return FALSE;
@@ -1299,7 +1299,7 @@ BOOL Wh_ModInit() {
 
     if (isCurrentToolModProcess) {
         g_toolModProcessMutex =
-            CreateMutex(nullptr, TRUE, L"windhawk-tool-mod_" WH_MOD_ID);
+            CreateMutexW(nullptr, TRUE, L"windhawk-tool-mod_" WH_MOD_ID);
         if (!g_toolModProcessMutex) {
             Wh_Log(L"CreateMutex failed");
             ExitProcess(1);
@@ -1315,7 +1315,7 @@ BOOL Wh_ModInit() {
         }
 
         IMAGE_DOS_HEADER* dosHeader =
-            (IMAGE_DOS_HEADER*)GetModuleHandle(nullptr);
+            (IMAGE_DOS_HEADER*)GetModuleHandleW(nullptr);
         IMAGE_NT_HEADERS* ntHeaders =
             (IMAGE_NT_HEADERS*)((BYTE*)dosHeader + dosHeader->e_lfanew);
 
@@ -1340,8 +1340,8 @@ void Wh_ModAfterInit() {
     }
 
     WCHAR currentProcessPath[MAX_PATH];
-    switch (GetModuleFileName(nullptr, currentProcessPath,
-                              ARRAYSIZE(currentProcessPath))) {
+    switch (GetModuleFileNameW(nullptr, currentProcessPath,
+                               ARRAYSIZE(currentProcessPath))) {
         case 0:
         case ARRAYSIZE(currentProcessPath):
             Wh_Log(L"GetModuleFileName failed");
@@ -1354,9 +1354,9 @@ void Wh_ModAfterInit() {
     swprintf_s(commandLine, L"\"%s\" -tool-mod \"%s\"", currentProcessPath,
                WH_MOD_ID);
 
-    HMODULE kernelModule = GetModuleHandle(L"kernelbase.dll");
+    HMODULE kernelModule = GetModuleHandleW(L"kernelbase.dll");
     if (!kernelModule) {
-        kernelModule = GetModuleHandle(L"kernel32.dll");
+        kernelModule = GetModuleHandleW(L"kernel32.dll");
         if (!kernelModule) {
             Wh_Log(L"No kernelbase.dll/kernel32.dll");
             return;
@@ -1379,8 +1379,8 @@ void Wh_ModAfterInit() {
         return;
     }
 
-    STARTUPINFO si{
-        .cb = sizeof(STARTUPINFO),
+    STARTUPINFOW si{
+        .cb = sizeof(STARTUPINFOW),
         .dwFlags = STARTF_FORCEOFFFEEDBACK,
     };
     PROCESS_INFORMATION pi;
