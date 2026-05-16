@@ -20,7 +20,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
 
 1. **Choose Device Count** — Open the **Settings** tab and pick how many devices to cycle through (2–6).
 2. **Choose Interaction Mode** — Select **Click to Swap** (left-click the icon) or **Scroll to Swap** (mouse wheel over the icon).
-3. **Choose Icons** — Pick an icon for each device slot. Icons for slots 3–6 are only used when the device count is set high enough.
+3. **Choose Icons** — Pick an icon for each device slot. Icons for slots 3–6 are only used when the device count is set high enough. (select Custom and save to open the file explorer)
 4. **Assign Devices** — Right-click the tray icon. Use **Set as Device 1 / 2 / 3...** to assign each slot from the live device list.
 5. **Swap** — Click or scroll the tray icon to cycle through your assigned devices.
 
