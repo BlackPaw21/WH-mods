@@ -2,7 +2,7 @@
 // @id              audioswap
 // @name            AudioSwap
 // @description     Tray icon to cycle between multiple preferred audio outputs. Supports up to 6 devices with click or scroll to swap.
-// @version         1.5.0
+// @version         1.4.0
 // @author          BlackPaw
 // @github          https://github.com/BlackPaw21
 // @include         windhawk.exe
@@ -41,14 +41,9 @@ Instantly cycle between multiple audio output devices from your system tray — 
 
 ## Changelog
 
-### v1.5.0
+### v1.4.0
 - Custom .ico support — selecting "Custom Icon" in settings now auto-opens a file picker; also available via right-click → "Custom Icon for Device X..."
 - Custom icon paths stored internally (no separate text setting in the UI).
-
-### v1.4.0
-- Mouse hook only installed in scroll-to-swap mode (performance fix).
-- Polling timer removed — device notifications use IMMNotificationClient instead.
-- Known bug description corrected to reference elevated/admin windows.
 
 ### v1.3.0
 - Up to 6 devices; scroll-to-swap mode; dynamic right-click menu.
