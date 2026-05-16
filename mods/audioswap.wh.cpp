@@ -35,7 +35,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
 
 ## Known Bugs
 
-- **Scroll to Swap may not respond over elevated windows.** A low-level mouse hook from a non-administrator process cannot see mouse events destined for elevated (administrator) windows, such as Task Manager or other admin-elevated applications. Switch focus away from an elevated window and scrolling will work normally.
+- **Scroll to Swap may not respond over elevated windows.** such as Task Manager, Windhawk or other admin-elevated applications. Switch focus away from an elevated window and scrolling will work normally.
 
 ---
 
