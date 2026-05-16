@@ -200,6 +200,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
 #define WM_TRAY_SCROLL       (WM_USER + 3)  // wParam = direction (+1 or -1)
 #define WM_UPDATE_HOOK_STATE (WM_USER + 4)
 #define WM_SHOW_FILE_PICKER  (WM_USER + 5)  // lParam = bitmask of slots needing pickers
+#define WM_RELOAD_ICONS     (WM_USER + 6)  // reload icons on tray thread (eliminates cross-thread handle race)
 
 // Slot N uses menu IDs: N*100 + device_index (0..31). Max slot 6 → ID 631.
 #define MENU_SLOT_BASE     100
@@ -1117,6 +1118,29 @@ LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             g_mouseHook = nullptr;
         }
 
+    } else if (msg == WM_RELOAD_ICONS) {
+        // Run icon reload on tray thread to eliminate cross-thread handle race.
+        WCHAR prev[MAX_DEVICE_SLOTS][32] = {};
+        for (int i = 0; i < MAX_DEVICE_SLOTS; i++)
+            wcscpy_s(prev[i], 32, g_lastIconSetting[i]);
+
+        LoadUserIconsAndSettings();
+        PostMessageW(hWnd, WM_UPDATE_TRAY_STATE, 0, 0);
+
+        DWORD pickerSlots = 0;
+        for (int i = 0; i < g_deviceSlotCount; i++) {
+            WCHAR key[16];
+            swprintf_s(key, L"icon%d", i + 1);
+            PCWSTR s = Wh_GetStringSetting(key);
+            BOOL isCustom = (s && wcscmp(s, L"custom") == 0);
+            BOOL wasCustom = (wcscmp(prev[i], L"custom") == 0);
+            if (s) Wh_FreeStringSetting(s);
+            if (isCustom && !wasCustom)
+                pickerSlots |= (1u << i);
+        }
+        if (pickerSlots)
+            PostMessageW(hWnd, WM_SHOW_FILE_PICKER, 0, (LPARAM)pickerSlots);
+
     } else if (msg == WM_SHOW_FILE_PICKER) {
         DWORD slots = (DWORD)lParam;
         for (int slot = 1; slots; slot++, slots >>= 1) {
@@ -1283,37 +1307,12 @@ BOOL WhTool_ModInit() {
 }
 
 void WhTool_ModSettingsChanged() {
-    RestoreMuteExternal();         // undo mute before mode may change
-
-    // Save previous icon settings BEFORE reloading, for transition detection.
-    WCHAR prevIcon[MAX_DEVICE_SLOTS][32] = {};
-    for (int i = 0; i < MAX_DEVICE_SLOTS; i++) {
-        wcscpy_s(prevIcon[i], 32, g_lastIconSetting[i]);
-    }
-
-    LoadUserIconsAndSettings();
+    RestoreMuteExternal();
     LoadDeviceSelections();
     HWND hwnd = g_trayHwnd;
-    if (hwnd) PostMessageW(hwnd, WM_UPDATE_TRAY_STATE, 0, 0);
-    HWND hwndHook = g_trayHwnd;
-    if (hwndHook) PostMessageW(hwndHook, WM_UPDATE_HOOK_STATE, 0, 0);
-
-    // Auto-trigger file picker for any slot switched TO "custom".
-    // Collect into a bitmask and post once to guarantee sequential order.
-    WCHAR iconKey[16];
-    DWORD pickerSlots = 0;
-    for (int i = 0; i < g_deviceSlotCount; i++) {
-        swprintf_s(iconKey, L"icon%d", i + 1);
-        PCWSTR s = Wh_GetStringSetting(iconKey);
-        BOOL isCustom = (s && wcscmp(s, L"custom") == 0);
-        BOOL wasCustom = (wcscmp(prevIcon[i], L"custom") == 0);
-        if (s) Wh_FreeStringSetting(s);
-        if (isCustom && !wasCustom) {
-            pickerSlots |= (1u << i);
-        }
-    }
-    if (pickerSlots && hwnd) {
-        PostMessageW(hwnd, WM_SHOW_FILE_PICKER, 0, (LPARAM)pickerSlots);
+    if (hwnd) {
+        PostMessageW(hwnd, WM_RELOAD_ICONS, 0, 0);
+        PostMessageW(hwnd, WM_UPDATE_HOOK_STATE, 0, 0);
     }
 }
 
