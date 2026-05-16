@@ -699,11 +699,11 @@ def validate_marker_block(
     # must conform to ==X== above") are not. This runs even when the block is
     # missing or optional.
     open_marker_line_re = re.compile(
-        r'^\s*//[ \t]+' + re.escape(open_marker) + r'[ \t]*$',
+        r'^[ \t]*//[ \t]+' + re.escape(open_marker) + r'[ \t]*$',
         re.MULTILINE,
     )
     close_marker_line_re = re.compile(
-        r'^\s*//[ \t]+' + re.escape(close_marker) + r'[ \t]*$',
+        r'^[ \t]*//[ \t]+' + re.escape(close_marker) + r'[ \t]*$',
         re.MULTILINE,
     )
 
@@ -941,7 +941,7 @@ def validate_specific_keywords(path: Path):
             if re.search(pattern, line):
                 # Skip GWL(P)_WNDPROC when used with GetWindowLong(Ptr)
                 if word in ('GWL_WNDPROC', 'GWLP_WNDPROC') and re.search(
-                    r'GetWindowLong(Ptr)?\s*\([^,]+,\s*GWLP?_WNDPROC\s*\)', line
+                    r'GetWindowLong(Ptr)?[AW]?\s*\([^,]+,\s*GWLP?_WNDPROC\s*\)', line
                 ):
                     continue
 
