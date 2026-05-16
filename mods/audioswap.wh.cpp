@@ -2,11 +2,11 @@
 // @id              audioswap
 // @name            AudioSwap
 // @description     Tray icon to cycle between multiple preferred audio outputs. Supports up to 6 devices with click or scroll to swap.
-// @version         1.3.0
+// @version         1.5.0
 // @author          BlackPaw
 // @github          https://github.com/BlackPaw21
 // @include         windhawk.exe
-// @compilerOptions -lshell32 -lgdi32 -luser32 -lole32 -luuid -loleaut32
+// @compilerOptions -lshell32 -lgdi32 -luser32 -lole32 -luuid -loleaut32 -lcomdlg32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -35,11 +35,20 @@ Instantly cycle between multiple audio output devices from your system tray — 
 
 ## Known Bugs
 
-- **Scroll to Swap may not respond over elevated windows.** such as **Task Manager**, **Windhawk** or other admin-elevated applications. Switch focus away from an elevated window and scrolling will work normally.
+- **Scroll to Swap may not respond over elevated windows.** A low-level mouse hook from a non-administrator process cannot see mouse events destined for elevated (administrator) windows, such as Task Manager or other admin-elevated applications. Switch focus away from an elevated window and scrolling will work normally.
 
 ---
 
 ## Changelog
+
+### v1.5.0
+- Custom .ico support — selecting "Custom Icon" in settings now auto-opens a file picker; also available via right-click → "Custom Icon for Device X..."
+- Custom icon paths stored internally (no separate text setting in the UI).
+
+### v1.4.0
+- Mouse hook only installed in scroll-to-swap mode (performance fix).
+- Polling timer removed — device notifications use IMMNotificationClient instead.
+- Known bug description corrected to reference elevated/admin windows.
 
 ### v1.3.0
 - Up to 6 devices; scroll-to-swap mode; dynamic right-click menu.
@@ -95,6 +104,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
     - headphones_modern: Modern Headphones
     - headset_modern: Modern Gaming Headset
     - earphones: Earphones
+    - custom: Custom Icon
 - icon2: speaker_square
   $name: Device 2 Icon
   $options:
@@ -108,6 +118,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
     - headphones_modern: Modern Headphones
     - headset_modern: Modern Gaming Headset
     - earphones: Earphones
+    - custom: Custom Icon
 - icon3: headphones
   $name: Device 3 Icon
   $description: Used when Number of Devices is 3 or more
@@ -122,6 +133,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
     - headphones_modern: Modern Headphones
     - headset_modern: Modern Gaming Headset
     - earphones: Earphones
+    - custom: Custom Icon
 - icon4: headset_gaming
   $name: Device 4 Icon
   $description: Used when Number of Devices is 4 or more
@@ -136,6 +148,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
     - headphones_modern: Modern Headphones
     - headset_modern: Modern Gaming Headset
     - earphones: Earphones
+    - custom: Custom Icon
 - icon5: headphones_modern
   $name: Device 5 Icon
   $description: Used when Number of Devices is 5 or more
@@ -150,6 +163,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
     - headphones_modern: Modern Headphones
     - headset_modern: Modern Gaming Headset
     - earphones: Earphones
+    - custom: Custom Icon
 - icon6: headset_modern
   $name: Device 6 Icon
   $description: Used when Number of Devices is 6
@@ -164,6 +178,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
     - headphones_modern: Modern Headphones
     - headset_modern: Modern Gaming Headset
     - earphones: Earphones
+    - custom: Custom Icon
 */
 // ==/WindhawkModSettings==
 
@@ -177,12 +192,14 @@ Instantly cycle between multiple audio output devices from your system tray — 
 #include <mmdeviceapi.h>
 #include <propidl.h>
 #include <functiondiscoverykeys_devpkey.h>
+#include <commdlg.h>
 
 #define TRAY_ICON_ID         1
 #define WM_TRAY_CALLBACK     (WM_USER + 1)
 #define WM_UPDATE_TRAY_STATE (WM_USER + 2)
 #define WM_TRAY_SCROLL       (WM_USER + 3)  // wParam = direction (+1 or -1)
 #define WM_UPDATE_HOOK_STATE (WM_USER + 4)
+#define WM_SHOW_FILE_PICKER  (WM_USER + 5)  // lParam = bitmask of slots needing pickers
 
 // Slot N uses menu IDs: N*100 + device_index (0..31). Max slot 6 → ID 631.
 #define MENU_SLOT_BASE     100
@@ -190,6 +207,7 @@ Instantly cycle between multiple audio output devices from your system tray — 
 #define MENU_OPEN_WINDHAWK 9000
 
 #define MAX_DEVICE_SLOTS 6
+#define MENU_CUSTOM_ICON_BASE 8000
 
 const DWORD CLICK_DEBOUNCE_MS  = 500;
 const DWORD SCROLL_DEBOUNCE_MS = 300;
@@ -203,6 +221,7 @@ static volatile HWND  g_trayHwnd          = nullptr;
 static HINSTANCE      g_hInstance         = nullptr;
 static WCHAR          g_windhawkPath[MAX_PATH] = {};
 static WCHAR          g_ddoresDllPath[MAX_PATH] = {};  // full system32 path
+static WCHAR          g_lastIconSetting[MAX_DEVICE_SLOTS][32] = {};
 static HICON          g_hWindHawkIcon     = nullptr;
 static HBITMAP        g_hWindHawkBmp      = nullptr;
 static DWORD          g_lastClickTime     = 0;
@@ -356,11 +375,29 @@ void LoadUserIconsAndSettings() {
 
     InterlockedExchange(&g_scrollToSwap, newScroll);
 
-    WCHAR iconKey[16];
+    WCHAR iconKey[16], pathKey[32];
     for (int i = 0; i < newCount; i++) {
         swprintf_s(iconKey, L"icon%d", i + 1);
         PCWSTR s = Wh_GetStringSetting(iconKey);
-        ExtractIconExW(g_ddoresDllPath, GetIconIndex(s), nullptr, &g_iconDev[i], 1);
+
+        if (s && wcscmp(s, L"custom") == 0) {
+            swprintf_s(pathKey, L"icon%d_custom_path", i + 1);
+            WCHAR customPath[MAX_PATH] = {};
+            Wh_GetStringValue(pathKey, customPath, MAX_PATH);
+            if (customPath[0]) {
+                g_iconDev[i] = (HICON)LoadImageW(NULL, customPath, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+            }
+            if (!g_iconDev[i]) {
+                ExtractIconExW(g_ddoresDllPath, 4, nullptr, &g_iconDev[i], 1);
+            }
+        } else {
+            ExtractIconExW(g_ddoresDllPath, GetIconIndex(s), nullptr, &g_iconDev[i], 1);
+        }
+
+        // Save current icon setting for transition detection in SettingsChanged.
+        if (s) wcscpy_s(g_lastIconSetting[i], 32, s);
+        else   g_lastIconSetting[i][0] = L'\0';
+
         if (s) Wh_FreeStringSetting(s);
 
         if (g_iconDev[i]) {
@@ -915,6 +952,18 @@ void BuildAndShowContextMenu(HWND hWnd) {
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
+    for (int slot = 0; slot < localCount; slot++) {
+        WCHAR label[48];
+        swprintf_s(label, L"Custom Icon for Device %d...", slot + 1);
+        MENUITEMINFOW miiCI = {sizeof(miiCI)};
+        miiCI.fMask      = MIIM_ID | MIIM_STRING;
+        miiCI.wID        = MENU_CUSTOM_ICON_BASE + slot;
+        miiCI.dwTypeData = label;
+        InsertMenuItemW(hMenu, (UINT)-1, TRUE, &miiCI);
+    }
+
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
     MENUITEMINFOW miiWH = {sizeof(miiWH)};
     miiWH.fMask      = MIIM_ID | MIIM_STRING | MIIM_BITMAP;
     miiWH.wID        = MENU_OPEN_WINDHAWK;
@@ -963,7 +1012,7 @@ void BuildAndShowContextMenu(HWND hWnd) {
     PostMessageW(hWnd, WM_NULL, 0, 0);
     DestroyMenu(hMenu);
 
-    if (cmd > 0 && cmd != MENU_OPEN_WINDHAWK) {
+    if (cmd >= MENU_SLOT_BASE && cmd < MENU_SLOT_BASE * (localCount + 1)) {
         int slot      = cmd / MENU_SLOT_BASE;
         int deviceIdx = cmd % MENU_SLOT_BASE;
         if (slot >= 1 && slot <= localCount && deviceIdx < deviceCount) {
@@ -975,6 +1024,26 @@ void BuildAndShowContextMenu(HWND hWnd) {
         sei.lpFile = g_windhawkPath;
         sei.nShow  = SW_SHOWNORMAL;
         ShellExecuteExW(&sei);
+    } else if (cmd >= MENU_CUSTOM_ICON_BASE && cmd < MENU_CUSTOM_ICON_BASE + localCount) {
+        int slot = cmd - MENU_CUSTOM_ICON_BASE + 1;
+        WCHAR path[MAX_PATH] = {};
+        OPENFILENAMEW ofn = {sizeof(ofn)};
+        ofn.hwndOwner = hWnd;
+        ofn.lpstrFilter = L"Icon Files (*.ico)\0*.ico\0All Files (*.*)\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrFile = path;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+        WCHAR title[64];
+        swprintf_s(title, L"Select Icon for Device %d", slot);
+        ofn.lpstrTitle = title;
+        if (GetOpenFileNameW(&ofn)) {
+            WCHAR customPathKey[32];
+            swprintf_s(customPathKey, L"icon%d_custom_path", slot);
+            Wh_SetStringValue(customPathKey, path);
+            LoadUserIconsAndSettings();
+            PostMessageW(hWnd, WM_UPDATE_TRAY_STATE, 0, 0);
+        }
     }
 }
 
@@ -1046,6 +1115,30 @@ LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         } else if (!isScroll && g_mouseHook) {
             UnhookWindowsHookEx(g_mouseHook);
             g_mouseHook = nullptr;
+        }
+
+    } else if (msg == WM_SHOW_FILE_PICKER) {
+        DWORD slots = (DWORD)lParam;
+        for (int slot = 1; slots; slot++, slots >>= 1) {
+            if (!(slots & 1)) continue;
+            WCHAR path[MAX_PATH] = {};
+            WCHAR title[64];
+            swprintf_s(title, L"Select Icon for Device %d", slot);
+            OPENFILENAMEW ofn = {sizeof(ofn)};
+            ofn.hwndOwner = hWnd;
+            ofn.lpstrFilter = L"Icon Files (*.ico)\0*.ico\0All Files (*.*)\0*.*\0";
+            ofn.nFilterIndex = 1;
+            ofn.lpstrFile = path;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+            ofn.lpstrTitle = title;
+            if (GetOpenFileNameW(&ofn)) {
+                WCHAR customPathKey[32];
+                swprintf_s(customPathKey, L"icon%d_custom_path", slot);
+                Wh_SetStringValue(customPathKey, path);
+                LoadUserIconsAndSettings();
+                PostMessageW(hWnd, WM_UPDATE_TRAY_STATE, 0, 0);
+            }
         }
 
     } else if (msg == g_taskbarCreatedMsg && g_taskbarCreatedMsg != 0) {
@@ -1191,12 +1284,37 @@ BOOL WhTool_ModInit() {
 
 void WhTool_ModSettingsChanged() {
     RestoreMuteExternal();         // undo mute before mode may change
+
+    // Save previous icon settings BEFORE reloading, for transition detection.
+    WCHAR prevIcon[MAX_DEVICE_SLOTS][32] = {};
+    for (int i = 0; i < MAX_DEVICE_SLOTS; i++) {
+        wcscpy_s(prevIcon[i], 32, g_lastIconSetting[i]);
+    }
+
     LoadUserIconsAndSettings();
     LoadDeviceSelections();
     HWND hwnd = g_trayHwnd;
     if (hwnd) PostMessageW(hwnd, WM_UPDATE_TRAY_STATE, 0, 0);
     HWND hwndHook = g_trayHwnd;
     if (hwndHook) PostMessageW(hwndHook, WM_UPDATE_HOOK_STATE, 0, 0);
+
+    // Auto-trigger file picker for any slot switched TO "custom".
+    // Collect into a bitmask and post once to guarantee sequential order.
+    WCHAR iconKey[16];
+    DWORD pickerSlots = 0;
+    for (int i = 0; i < g_deviceSlotCount; i++) {
+        swprintf_s(iconKey, L"icon%d", i + 1);
+        PCWSTR s = Wh_GetStringSetting(iconKey);
+        BOOL isCustom = (s && wcscmp(s, L"custom") == 0);
+        BOOL wasCustom = (wcscmp(prevIcon[i], L"custom") == 0);
+        if (s) Wh_FreeStringSetting(s);
+        if (isCustom && !wasCustom) {
+            pickerSlots |= (1u << i);
+        }
+    }
+    if (pickerSlots && hwnd) {
+        PostMessageW(hwnd, WM_SHOW_FILE_PICKER, 0, (LPARAM)pickerSlots);
+    }
 }
 
 void WhTool_ModUninit() {
