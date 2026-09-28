@@ -1579,7 +1579,7 @@ static void ShowPopupMenu(HWND hwnd = nullptr) {
         case MENU_OPEN_SETTINGS: {
             HWND dh = (HWND)InterlockedCompareExchangePointer((PVOID*)&g_dashboardHwnd, nullptr, nullptr);
             if (dh && IsWindow(dh)) {
-                SetForegroundWindow(dh);
+                BTBatGui::BringToForeground(dh);
                 break;
             }
             HANDLE hOldThread = (HANDLE)InterlockedCompareExchangePointer(
@@ -2413,10 +2413,49 @@ namespace BTBatGui {
         return 0;
     }
 
+    void BringToForeground(HWND hWnd) {
+        if (!hWnd || !IsWindow(hWnd)) return;
+
+        if (IsIconic(hWnd)) {
+            ShowWindow(hWnd, SW_RESTORE);
+        } else {
+            ShowWindow(hWnd, SW_SHOW);
+        }
+
+        HWND hFore = GetForegroundWindow();
+        DWORD foreThread = hFore ? GetWindowThreadProcessId(hFore, nullptr) : 0;
+        DWORD curThread = GetCurrentThreadId();
+        DWORD targetThread = GetWindowThreadProcessId(hWnd, nullptr);
+
+        if (foreThread && foreThread != curThread) {
+            AttachThreadInput(curThread, foreThread, TRUE);
+        }
+        if (targetThread && targetThread != curThread) {
+            AttachThreadInput(curThread, targetThread, TRUE);
+        }
+
+        BringWindowToTop(hWnd);
+        SetForegroundWindow(hWnd);
+        SetActiveWindow(hWnd);
+        SetFocus(hWnd);
+
+        if (targetThread && targetThread != curThread) {
+            AttachThreadInput(curThread, targetThread, FALSE);
+        }
+        if (foreThread && foreThread != curThread) {
+            AttachThreadInput(curThread, foreThread, FALSE);
+        }
+    }
+
     // Spawn the dashboard GUI thread (single-instance guarded by g_guiRunning)
     HANDLE LaunchDashboard(HWND hTrayHwnd) {
-        if (InterlockedCompareExchange(&g_guiRunning, 1, 0) != 0)
+        if (InterlockedCompareExchange(&g_guiRunning, 1, 0) != 0) {
+            HWND dh = (HWND)InterlockedCompareExchangePointer((PVOID*)&g_dashboardHwnd, nullptr, nullptr);
+            if (dh && IsWindow(dh)) {
+                BringToForeground(dh);
+            }
             return nullptr;
+        }
         HANDLE h = (HANDLE)_beginthreadex(nullptr, 0, GuiThreadProc,
                                 reinterpret_cast<LPVOID>(hTrayHwnd), 0, nullptr);
         if (!h) InterlockedExchange(&g_guiRunning, 0);
