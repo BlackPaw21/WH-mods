@@ -2,13 +2,13 @@
 // @id              bt-battery-monitor
 // @name            BT Battery Monitor
 // @description     Shows Bluetooth device battery levels in the system tray with battery overview
-// @version         1.0.0
+// @version         1.1.0
 // @author          BlackPaw
 // @github          https://github.com/BlackPaw21
 // @donateUrl       https://ko-fi.com/blackpaw21
 // @include         windhawk.exe
 // @license         MIT
-// @compilerOptions -lbluetoothapis -lbthprops -lsetupapi -lcfgmgr32 -lgdi32 -luser32 -lshell32 -lole32 -luuid -lcomctl32 -lcomdlg32
+// @compilerOptions -lbluetoothapis -lbthprops -lsetupapi -lcfgmgr32 -lgdi32 -luser32 -lshell32 -lole32 -luuid -lcomctl32 -lcomdlg32 -lhid -ffp-exception-behavior=maytrap
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -65,6 +65,16 @@ Pick how often the mod checks for updates, from **every second** to **once an ho
 
 ## Changelog
 
+# 1.1.0
+- **Direct controller HID battery support:** Direct HID battery reading for Sony controllers (DualSense, DualSense Edge, DualShock 4) and Nintendo Switch controllers (Switch Pro, Joy-Con, SNES, N64, Genesis) when Windows does not expose standard Bluetooth battery properties.
+- **5-minute HID cache & wake-up:** 5-minute validated HID battery caching to reduce polling overhead, plus controller wake-up sequences for reporting battery while sleeping.
+- **Automatic Bluetooth address resolution:** Walks parent devnode tree from HID interface to BTHENUM node, with fallback to FriendlyName/BusReportedDeviceDesc.
+- **Numeric battery tray badge:** Tray icon badge displaying lowest battery, cycling across connected devices, or icon-only mode.
+- **Low-battery notifications:** Configurable notification threshold (Off, 10%, 15%, 20%, 30%) with a 30-minute per-device repeat cooldown.
+- **Auto-hide when disconnected:** Optional setting in Windhawk to automatically hide the tray icon when no Bluetooth devices are connected.
+- **Streamlined tray menu & 2-row dashboard:** Clean right-click context menu, and redesigned 2-row configuration dashboard for polling interval, flashing warning threshold, badge mode, and notification alerts.
+- **Shell Version 4 integration:** Dynamic tray icon addition and removal using `NOTIFYICON_VERSION_4`.
+
 # 1.0.0
 - **New:** Tray icon shows battery percentage for every connected Bluetooth device — keyboard, mouse, headphones, controller, you name it.
 - **New:** Left-click triggers an immediate Bluetooth rescan to refresh battery readouts.
@@ -78,6 +88,14 @@ Pick how often the mod checks for updates, from **every second** to **once an ho
 - **New:** Safe tool mod — runs in a dedicated `windhawk.exe` child process, no Explorer injection needed.
 */
 // ==/WindhawkModReadme==
+
+// ==WindhawkModSettings==
+/*
+- autoHideNoDevices: false
+  $name: Auto-hide when no devices connected
+  $description: Automatically hide the tray icon when all Bluetooth devices are disconnected. The icon reappears as soon as a device connects. You can always change this setting here in Windhawk even when the tray icon is hidden.
+*/
+// ==/WindhawkModSettings==
 
 // ─── Win32 / CRT Headers ────────────────────────────────────────────────────
 
@@ -96,19 +114,25 @@ Pick how often the mod checks for updates, from **every second** to **once an ho
 #include <string>
 #include <utility>
 #include <atomic>
+#include <algorithm>
 #include <process.h>
 #include <shobjidl.h>
 #include <propkey.h>
 #include <propsys.h>
+#include <hidsdi.h>
 
 
 // ─── Message & Menu Constants ────────────────────────────────────────────────
+#define TRAY_ICON_ID 1
 
 #define WM_TRAY_CALLBACK (WM_USER + 1)
 #define WM_UPDATE_DEVICES (WM_USER + 2)
 #define WM_RELOAD_ALL (WM_USER + 3)
 #ifndef NIN_SELECT
 #define NIN_SELECT (WM_USER + 0)
+#endif
+#ifndef NIN_KEYSELECT
+#define NIN_KEYSELECT (NIN_SELECT | 0x1)
 #endif
 #define IDM_RESCAN 2001
 #define IDM_BT_SETTINGS 2002
@@ -122,6 +146,13 @@ static const DEVPROPKEY DEVPKEY_Bluetooth_DeviceAddress = { {0xE57A6B4A, 0x21B8,
 static const DEVPROPKEY DEVPKEY_Device_FriendlyName   = { {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14 };
 static const DEVPROPKEY DEVPKEY_Device_BusReportedDeviceDesc = { {0x540b947e, 0x8b40, 0x45bc, {0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c, 0xbd, 0xa2}}, 4 };
 static const DEVPROPKEY DEVPKEY_Bluetooth_IsConnected = { {0x2bd67d8b, 0x8beb, 0x48d5, {0x87, 0xe0, 0x6c, 0xda, 0x34, 0x28, 0x04, 0x0a}}, 1 };
+
+// ─── HID Battery Constants ─────────────────────────────────────────────────────
+
+static const WORD VENDOR_SONY = 0x054C;
+static const WORD VENDOR_NINTENDO = 0x057E;
+
+static const int HID_CACHE_TTL_MS = 300000;
 
 // ─── Device Interface GUIDs ──────────────────────────────────────────────────
 
@@ -175,10 +206,21 @@ static UINT g_taskbarCreatedMsg = 0;
 // Settings (atomically readable from any thread)
 static std::atomic<LONG> g_refreshIntervalMs{10000};
 static std::atomic<int> g_warningThreshold{30};
+static std::atomic<int> g_badgeMode{0};  // lowest, cycle, off
+static std::atomic<int> g_alertThreshold{15};
+static std::atomic<bool> g_alertsEnabled{true};
+static std::atomic<bool> g_autoHideNoDevices{false};
 
 // Tray icon cache to avoid redundant NIM_MODIFY calls
 static WCHAR g_lastTip[128] = {};
 static HICON g_lastIcon = NULL;
+static bool g_trayVisible = false;
+static HICON g_badgeIcon = NULL;
+static int g_badgeValue = -1;
+static bool g_badgeWarning = false;
+static bool g_badgeFlash = false;
+struct BatteryAlertTick { BYTE address[6]; ULONGLONG tick; };
+static std::vector<BatteryAlertTick> g_alertTicks;  // tray thread only
 
 // Dashboard GUI thread
 static HANDLE g_guiThread = nullptr;
@@ -191,6 +233,31 @@ static std::atomic<bool> g_iconsAvailable{true};
 static HDEVNOTIFY g_hNotifyHid = nullptr;
 static HDEVNOTIFY g_hNotifyGatt = nullptr;
 static HDEVNOTIFY g_hNotifyBthPort = nullptr;
+
+// Scanner-thread-only cache of validated HID values by interface identity.
+struct HidBatteryCacheEntry {
+    std::wstring path;
+    WORD pid = 0;
+    bool sony = false;
+    int percent = -1;
+    DWORD successTick = 0;
+    DWORD attemptTick = 0;
+    bool attempted = false;
+};
+static std::vector<HidBatteryCacheEntry> g_hidBatteryCache;
+
+static const WORD g_knownHidVidPids[][2] = {
+    {VENDOR_SONY,     0x05C4}, // DS4 v1
+    {VENDOR_SONY,     0x09CC}, // DS4 v2
+    {VENDOR_SONY,     0x0CE6}, // DualSense
+    {VENDOR_SONY,     0x0DF2}, // DualSense Edge
+    {VENDOR_NINTENDO, 0x2006}, // JoyCon R
+    {VENDOR_NINTENDO, 0x2007}, // JoyCon L
+    {VENDOR_NINTENDO, 0x2009}, // Switch Pro
+    {VENDOR_NINTENDO, 0x2017}, // SNES
+    {VENDOR_NINTENDO, 0x2019}, // N64
+    {VENDOR_NINTENDO, 0x201E}, // Genesis
+};
 
 namespace BTBatGui {
     HANDLE LaunchDashboard(HWND hTrayHwnd);
@@ -278,6 +345,75 @@ static HICON CreateColorIcon(BYTE r, BYTE g, BYTE b, int size) {
     return hIcon;
 }
 
+static HICON CreatePercentIcon(int percent, bool warning, bool flash) {
+    constexpr int size = 32;
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = size;
+    bi.bmiHeader.biHeight = -size;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    DWORD* pixels = nullptr;
+    HDC screen = GetDC(nullptr);
+    HBITMAP color = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, (void**)&pixels, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+    if (!color) return nullptr;
+    COLORREF fill = warning ? (flash ? RGB(205, 42, 42) : RGB(30, 30, 30)) :
+        (percent <= 40 ? RGB(205, 150, 25) : RGB(36, 145, 77));
+    DWORD pixelFill = (DWORD)GetBValue(fill) | ((DWORD)GetGValue(fill) << 8) |
+                      ((DWORD)GetRValue(fill) << 16);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            int dx = x - 16, dy = y - 16;
+            pixels[y * size + x] = dx * dx + dy * dy <= 225 ?
+                (0xFF000000 | pixelFill) : 0;
+        }
+    }
+    HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) { DeleteObject(color); return nullptr; }
+    HBITMAP oldBitmap = (HBITMAP)SelectObject(dc, color);
+    HFONT font = CreateFontW(percent == 100 ? -17 : -21, 0, 0, 0, FW_BOLD,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    HFONT oldFont = font ? (HFONT)SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    WCHAR label[4];
+    swprintf_s(label, L"%d", percent);
+    RECT textRect = {0, 0, size, size};
+    DrawTextW(dc, label, -1, &textRect, DT_SINGLELINE | DT_CENTER | DT_VCENTER);
+    if (font) { SelectObject(dc, oldFont); DeleteObject(font); }
+    SelectObject(dc, oldBitmap);
+    DeleteDC(dc);
+    // GDI text drawing may clear alpha; restore it inside the opaque badge.
+    for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+            if ((x - 16) * (x - 16) + (y - 16) * (y - 16) <= 225)
+                pixels[y * size + x] |= 0xFF000000;
+    HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
+    if (!mask) { DeleteObject(color); return nullptr; }
+    HDC maskDc = CreateCompatibleDC(nullptr);
+    if (!maskDc) { DeleteObject(mask); DeleteObject(color); return nullptr; }
+    HBITMAP oldMask = (HBITMAP)SelectObject(maskDc, mask);
+    RECT all = {0, 0, size, size};
+    FillRect(maskDc, &all, (HBRUSH)GetStockObject(WHITE_BRUSH));
+    HBRUSH oldBrush = (HBRUSH)SelectObject(maskDc, GetStockObject(BLACK_BRUSH));
+    HPEN oldPen = (HPEN)SelectObject(maskDc, GetStockObject(NULL_PEN));
+    Ellipse(maskDc, 1, 1, 31, 31);
+    SelectObject(maskDc, oldPen);
+    SelectObject(maskDc, oldBrush);
+    SelectObject(maskDc, oldMask);
+    DeleteDC(maskDc);
+    ICONINFO ii = {};
+    ii.fIcon = TRUE;
+    ii.hbmColor = color;
+    ii.hbmMask = mask;
+    HICON icon = CreateIconIndirect(&ii);
+    DeleteObject(mask);
+    DeleteObject(color);
+    return icon;
+}
+
 // Generate a red X icon for the "no connected devices" state
 static HICON CreateXIcon(int size) {
     BITMAPINFO bi = {};
@@ -314,10 +450,12 @@ static HICON CreateXIcon(int size) {
     FillRect(hdcMask, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
     HBRUSH hbrWhite = CreateSolidBrush(RGB(255, 255, 255));
     HPEN hWhitePen = CreatePen(PS_SOLID, t, RGB(255, 255, 255));
-    SelectObject(hdcMask, hbrWhite);
-    SelectObject(hdcMask, hWhitePen);
+    HBRUSH hOldBrush = (HBRUSH)SelectObject(hdcMask, hbrWhite);
+    HPEN hOldPen = (HPEN)SelectObject(hdcMask, hWhitePen);
     MoveToEx(hdcMask, 0, 0, NULL); LineTo(hdcMask, size, size);
     MoveToEx(hdcMask, size, 0, NULL); LineTo(hdcMask, 0, size);
+    SelectObject(hdcMask, hOldBrush);
+    SelectObject(hdcMask, hOldPen);
     SelectObject(hdcMask, hOldBmp);
     DeleteObject(hbrWhite);
     DeleteObject(hWhitePen);
@@ -335,6 +473,7 @@ static HICON CreateXIcon(int size) {
 
 // Free all cached icon / GDI resources
 static void DestroyIcons() {
+    if (g_badgeIcon) { DestroyIcon(g_badgeIcon); g_badgeIcon = NULL; g_badgeValue = -1; }
     if (g_hIconDisconnected) { DestroyIcon(g_hIconDisconnected); g_hIconDisconnected = NULL; }
     if (g_hIconKeyboard) { DestroyIcon(g_hIconKeyboard); g_hIconKeyboard = NULL; }
     if (g_hIconMouse) { DestroyIcon(g_hIconMouse); g_hIconMouse = NULL; }
@@ -752,6 +891,327 @@ static void RefreshBthleConnectedState(std::vector<DeviceInfo>& devices) {
     SetupDiDestroyDeviceInfoList(hDevs);
 }
 
+// ─── HID Battery Reading ──────────────────────────────────────────────────────
+//
+// Reads battery directly from Sony/Nintendo controller HID input reports.
+// Required because these controllers don't expose DEVPKEY_Bluetooth_BatteryLevel
+// over Bluetooth — the battery info is only in the proprietary HID report.
+
+// Walk the devnode parent chain to find a node with a Bluetooth device address.
+// HID devices (children of BTHENUM) sit under the BTH\... radio node which has
+// the BT address property.
+static bool ReadBtAddressFromDevnode(DEVINST devInst, BYTE address[6]) {
+    DEVINST current = devInst;
+    while (true) {
+        WCHAR btAddr[13] = {};
+        DEVPROPTYPE propType = DEVPROP_TYPE_EMPTY;
+        ULONG propSize = sizeof(btAddr);
+        if (CM_Get_DevNode_PropertyW(current, &DEVPKEY_Bluetooth_DeviceAddress, &propType, (PBYTE)btAddr, &propSize, 0) == CR_SUCCESS
+            && propType == DEVPROP_TYPE_STRING
+            && wcslen(btAddr) == 12) {
+            for (int i = 0; i < 6; i++) {
+                WCHAR byteStr[3] = { btAddr[i*2], btAddr[i*2+1], 0 };
+                address[5-i] = (BYTE)wcstoul(byteStr, NULL, 16);
+            }
+            return true;
+        }
+        DEVINST parent = 0;
+        if (CM_Get_Parent(&parent, current, 0) != CR_SUCCESS)
+            break;
+        current = parent;
+    }
+    return false;
+}
+
+static bool GetDeviceNameFromDevnode(DEVINST devInst, WCHAR* name, ULONG nameLen) {
+    DEVPROPTYPE pt = DEVPROP_TYPE_EMPTY;
+    ULONG ns = nameLen * sizeof(WCHAR);
+    if (CM_Get_DevNode_PropertyW(devInst, &DEVPKEY_Device_FriendlyName, &pt, (PBYTE)name, &ns, 0) == CR_SUCCESS
+        && pt == DEVPROP_TYPE_STRING && name[0])
+        return true;
+    pt = DEVPROP_TYPE_EMPTY;
+    ns = nameLen * sizeof(WCHAR);
+    if (CM_Get_DevNode_PropertyW(devInst, &DEVPKEY_Device_BusReportedDeviceDesc, &pt, (PBYTE)name, &ns, 0) == CR_SUCCESS
+        && pt == DEVPROP_TYPE_STRING && name[0])
+        return true;
+    return false;
+}
+
+// Perform a HID read with 1-second timeout via overlapped I/O.
+// Returns true and fills report if data arrived within the timeout.
+static bool ReadHidReportWithTimeout(HANDLE hDevice, BYTE* report, DWORD reportSize, DWORD timeoutMs) {
+    OVERLAPPED ov = {};
+    ov.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!ov.hEvent) return false;
+
+    DWORD bytesRead = 0;
+    bool result = false;
+    if (ReadFile(hDevice, report, reportSize, &bytesRead, &ov)) {
+        result = bytesRead >= reportSize;
+    } else if (GetLastError() == ERROR_IO_PENDING) {
+        if (WaitForSingleObject(ov.hEvent, timeoutMs) == WAIT_OBJECT_0) {
+            result = GetOverlappedResult(hDevice, &ov, &bytesRead, FALSE) && bytesRead >= reportSize;
+        } else {
+            CancelIoEx(hDevice, &ov);
+            // Cancellation is a request, not completion. The stack buffer and
+            // OVERLAPPED must remain alive until this request terminates.
+            DWORD completedBytes = 0;
+            if (GetOverlappedResult(hDevice, &ov, &completedBytes, TRUE))
+                result = completedBytes >= reportSize;
+        }
+    }
+
+    CloseHandle(ov.hEvent);
+    return result;
+}
+
+static bool TryReadDualSenseHid(const WCHAR* devicePath, int& batteryPercent) {
+    HANDLE hDevice = CreateFileW(devicePath, GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED, NULL);
+    if (hDevice == INVALID_HANDLE_VALUE)
+        return false;
+
+    bool result = false;
+    BYTE report[78] = {};
+
+    BYTE wakeup[41] = {0x05};
+    HidD_GetFeature(hDevice, wakeup, sizeof(wakeup));
+    Sleep(300);
+
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (ReadHidReportWithTimeout(hDevice, report, sizeof(report), 1000)) {
+            if (report[0] == 0x31) {
+                BYTE raw = report[54];
+                bool fullCharge = ((raw & 0xF0) >> 4) == 2;
+                BYTE nibble = raw & 0xF;
+                if (fullCharge || nibble >= 10)
+                    batteryPercent = 100;
+                else
+                    batteryPercent = (nibble * 10) + 10;
+                result = true;
+                break;
+            }
+        }
+        Sleep(300);
+    }
+
+    CloseHandle(hDevice);
+    return result;
+}
+
+static bool TryReadDs4Hid(const WCHAR* devicePath, int& batteryPercent) {
+    HANDLE hDevice = CreateFileW(devicePath, GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED, NULL);
+    if (hDevice == INVALID_HANDLE_VALUE)
+        return false;
+
+    bool result = false;
+    BYTE report[547] = {};
+
+    BYTE wakeup[41] = {0x05};
+    HidD_GetFeature(hDevice, wakeup, sizeof(wakeup));
+    Sleep(300);
+
+    for (int attempt = 0; attempt < 5; attempt++) {
+        if (ReadHidReportWithTimeout(hDevice, report, sizeof(report), 1000)) {
+            if (report[0] == 0x11) {
+                BYTE nibble = report[32] & 0xF;
+                if (nibble >= 10)
+                    batteryPercent = 100;
+                else
+                    batteryPercent = (nibble * 10) + 10;
+                result = true;
+                break;
+            }
+        }
+        Sleep(300);
+    }
+
+    CloseHandle(hDevice);
+    return result;
+}
+
+static bool TryReadNintendoHid(const WCHAR* devicePath, int& batteryPercent) {
+    HANDLE hDevice = CreateFileW(devicePath, GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+        FILE_FLAG_OVERLAPPED, NULL);
+    if (hDevice == INVALID_HANDLE_VALUE)
+        return false;
+
+    bool result = false;
+    BYTE report[362] = {};
+
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (ReadHidReportWithTimeout(hDevice, report, sizeof(report), 1000)) {
+            BYTE raw3 = (report[2] & 0xE0) >> 5;
+            int pct = raw3 * 25;
+            batteryPercent = (pct > 100) ? 100 : pct;
+            result = true;
+            break;
+        }
+        Sleep(200);
+    }
+
+    CloseHandle(hDevice);
+    return result;
+}
+
+static bool ParseVidPidFromHardwareId(const WCHAR* hwid, WORD& vid, WORD& pid) {
+    if (!hwid) return false;
+    const WCHAR* vidStr = wcsstr(hwid, L"VID_");
+    const WCHAR* pidStr = wcsstr(hwid, L"PID_");
+    if (!vidStr || !pidStr) return false;
+    vid = (WORD)wcstoul(vidStr + 4, NULL, 16);
+    pid = (WORD)wcstoul(pidStr + 4, NULL, 16);
+    return vid != 0 && pid != 0;
+}
+
+static int FindDeviceIndexByName(const std::vector<DeviceInfo>& devices, const WCHAR* name) {
+    if (!name || !name[0]) return -1;
+    int found = -1;
+    for (size_t i = 0; i < devices.size(); i++) {
+        if (devices[i].connected && _wcsicmp(devices[i].name.c_str(), name) == 0) {
+            if (found >= 0) return -1;  // same-name devices are ambiguous
+            found = (int)i;
+        }
+    }
+    return found;
+}
+
+static bool GetCachedHidBattery(const WCHAR* path, WORD pid, bool isSony,
+                                int& batteryPercent) {
+    DWORD now = GetTickCount();
+    HidBatteryCacheEntry* entry = nullptr;
+    for (auto& candidate : g_hidBatteryCache) {
+        if (_wcsicmp(candidate.path.c_str(), path) == 0 &&
+            candidate.pid == pid && candidate.sony == isSony) {
+            entry = &candidate;
+            break;
+        }
+    }
+    if (!entry) {
+        g_hidBatteryCache.push_back({});
+        entry = &g_hidBatteryCache.back();
+        entry->path = path;
+        entry->pid = pid;
+        entry->sony = isSony;
+    }
+    if (entry->percent >= 0 && now - entry->successTick < (DWORD)HID_CACHE_TTL_MS) {
+        batteryPercent = entry->percent;
+        return true;
+    }
+    if (entry->attempted && now - entry->attemptTick < 30000)
+        return false;
+    entry->attempted = true;
+    entry->attemptTick = now;
+    int measured = -1;
+    bool ok = isSony ? ((pid == 0x0CE6 || pid == 0x0DF2) ?
+        TryReadDualSenseHid(path, measured) : TryReadDs4Hid(path, measured)) :
+        TryReadNintendoHid(path, measured);
+    if (!ok || measured < 0 || measured > 100) return false;
+    entry->percent = batteryPercent = measured;
+    entry->successTick = now;
+    return true;
+}
+
+// Main HID device enumeration — finds Sony/Nintendo HID devices, resolves BT
+// address by walking the parent chain, matches against the existing device
+// list, and reads battery from the HID input report. Skips USB-only devices
+// that have no corresponding Bluetooth entry.
+static void EnumerateHidDevices(std::vector<DeviceInfo>& devices) {
+    DWORD now = GetTickCount();
+    g_hidBatteryCache.erase(std::remove_if(g_hidBatteryCache.begin(), g_hidBatteryCache.end(),
+        [now](const HidBatteryCacheEntry& entry) {
+            return entry.attempted && now - entry.attemptTick >= (DWORD)HID_CACHE_TTL_MS * 2;
+        }), g_hidBatteryCache.end());
+    HDEVINFO hDevs = SetupDiGetClassDevsW(&GUID_DEVINTERFACE_HID, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (hDevs == INVALID_HANDLE_VALUE)
+        return;
+
+    SP_DEVICE_INTERFACE_DATA dia = { sizeof(SP_DEVICE_INTERFACE_DATA) };
+    for (DWORD i = 0; SetupDiEnumDeviceInterfaces(hDevs, NULL, &GUID_DEVINTERFACE_HID, i, &dia); i++) {
+        DWORD reqSize = 0;
+        SetupDiGetDeviceInterfaceDetailW(hDevs, &dia, NULL, 0, &reqSize, NULL);
+        if (reqSize == 0) continue;
+
+        std::vector<BYTE> buf(reqSize);
+        PSP_DEVICE_INTERFACE_DETAIL_DATA_W detail = (PSP_DEVICE_INTERFACE_DETAIL_DATA_W)buf.data();
+        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+
+        SP_DEVINFO_DATA devData = { sizeof(SP_DEVINFO_DATA) };
+        if (!SetupDiGetDeviceInterfaceDetailW(hDevs, &dia, detail, reqSize, NULL, &devData))
+            continue;
+
+        WCHAR hwid[256] = {};
+        DEVPROPTYPE pt = DEVPROP_TYPE_EMPTY;
+        ULONG hwSize = sizeof(hwid);
+        if (CM_Get_DevNode_Registry_PropertyW(devData.DevInst, CM_DRP_HARDWAREID, &pt, hwid, &hwSize, 0) != CR_SUCCESS
+            || pt != DEVPROP_TYPE_STRING || !hwid[0])
+            continue;
+
+        WORD vid = 0, pid = 0;
+        if (!ParseVidPidFromHardwareId(hwid, vid, pid))
+            continue;
+
+        bool isKnown = false;
+        bool isSony = false;
+        for (const auto& entry : g_knownHidVidPids) {
+            if (entry[0] == vid && entry[1] == pid) {
+                isKnown = true;
+                isSony = (vid == VENDOR_SONY);
+                break;
+            }
+        }
+        if (!isKnown) continue;
+
+        BYTE btAddress[6] = {};
+        bool hasAddress = ReadBtAddressFromDevnode(devData.DevInst, btAddress);
+
+        if (hasAddress) {
+            int devIdx = -1;
+            for (size_t j = 0; j < devices.size(); j++) {
+                if (memcmp(devices[j].address, btAddress, 6) == 0) {
+                    devIdx = (int)j;
+                    break;
+                }
+            }
+
+            if (devIdx < 0) {
+                // Address found but no matching BT device — try name fallback
+                WCHAR devName[128] = {};
+                if (!GetDeviceNameFromDevnode(devData.DevInst, devName, 128))
+                    continue;
+                devIdx = FindDeviceIndexByName(devices, devName);
+                if (devIdx < 0) continue;
+            }
+
+            if (!devices[devIdx].connected || devices[devIdx].batteryPercent >= 0)
+                continue;
+
+            int battery = -1;
+            if (GetCachedHidBattery(detail->DevicePath, pid, isSony, battery))
+                devices[devIdx].batteryPercent = battery;
+        } else {
+            // No BT address in parent chain — try name-only match
+            WCHAR devName[128] = {};
+            if (!GetDeviceNameFromDevnode(devData.DevInst, devName, 128))
+                continue;
+
+            int devIdx = FindDeviceIndexByName(devices, devName);
+            if (devIdx < 0) continue;
+            if (!devices[devIdx].connected || devices[devIdx].batteryPercent >= 0) continue;
+
+            int battery = -1;
+            if (GetCachedHidBattery(detail->DevicePath, pid, isSony, battery))
+                devices[devIdx].batteryPercent = battery;
+        }
+    }
+
+    SetupDiDestroyDeviceInfoList(hDevs);
+}
+
 // ─── Scanner Thread ──────────────────────────────────────────────────────────
 
 // Background polling thread — collects Bluetooth device data on interval or rescan signal
@@ -800,6 +1260,7 @@ static unsigned int __stdcall ScannerProc(void*) {
             RefreshConnectedState(newDevices);
             GetBatteryFromMediaClass(newDevices);
             GetBatteryFromRegistry(newDevices);
+            EnumerateHidDevices(newDevices);
 
             {   CsLock lock(g_devicesLock);
                 g_devices = std::move(newDevices);
@@ -845,19 +1306,62 @@ static void UpdateTrayIcon() {
         currentDevices = g_devices;
     }
     int lowest = -1;
+    int lowestIndex = -1;
     int devCount = 0;
     DeviceType singleType = DEVICE_UNKNOWN;
-    for (const auto& d : currentDevices) {
+    for (size_t i = 0; i < currentDevices.size(); i++) {
+        const auto& d = currentDevices[i];
         if (d.connected) {
             devCount++;
             DeviceType dt = GetDeviceType(d);
             if (devCount == 1) singleType = dt;
-            if (d.batteryPercent >= 0 && (lowest < 0 || d.batteryPercent < lowest))
+            if (d.batteryPercent >= 0 && (lowest < 0 || d.batteryPercent < lowest)) {
                 lowest = d.batteryPercent;
+                lowestIndex = (int)i;
+            }
         }
+    }
+    int badgeIndex = lowestIndex;
+    int badgeMode = g_badgeMode.load();
+    if (badgeMode == 1) {
+        int known = 0;
+        for (const auto& d : currentDevices)
+            if (d.connected && d.batteryPercent >= 0) known++;
+        if (known > 0) {
+            int chosen = (int)((GetTickCount64() / 5000) % known);
+            for (size_t i = 0; i < currentDevices.size(); i++) {
+                if (currentDevices[i].connected && currentDevices[i].batteryPercent >= 0 && chosen-- == 0) {
+                    badgeIndex = (int)i;
+                    break;
+                }
+            }
+        }
+    }
+    int badgePercent = badgeIndex >= 0 ? currentDevices[badgeIndex].batteryPercent : -1;
+
+    if (g_autoHideNoDevices.load() && devCount == 0) {
+        if (g_trayVisible) {
+            NOTIFYICONDATAW nid = {sizeof(nid)};
+            nid.hWnd = hwnd;
+            nid.uID = TRAY_ICON_ID;
+            nid.guidItem = GUID_BTBAT_TRAY;
+            nid.uFlags = NIF_GUID;
+            Shell_NotifyIconW(NIM_DELETE, &nid);
+            g_trayVisible = false;
+            g_lastIcon = NULL;
+            g_lastTip[0] = L'\0';
+            if (g_badgeIcon) {
+                DestroyIcon(g_badgeIcon);
+                g_badgeIcon = NULL;
+                g_badgeValue = -1;
+            }
+        }
+        return;
     }
 
     NOTIFYICONDATAW nid = {sizeof(nid)};
+    nid.hWnd = hwnd;
+    nid.uID = TRAY_ICON_ID;
     nid.guidItem = GUID_BTBAT_TRAY;
     nid.uFlags = NIF_ICON | NIF_TIP | NIF_GUID | NIF_SHOWTIP;
     
@@ -898,10 +1402,94 @@ static void UpdateTrayIcon() {
             StringCchPrintfW(nid.szTip, ARRAYSIZE(nid.szTip), L"%d devices", devCount);
     }
 
-    if (wcscmp(nid.szTip, g_lastTip) != 0 || nid.hIcon != g_lastIcon) {
+    if (badgeMode == 1 && badgeIndex >= 0) {
+        const auto& shown = currentDevices[badgeIndex];
+        StringCchPrintfW(nid.szTip, ARRAYSIZE(nid.szTip), L"%s — %d%%",
+                         shown.name.c_str(), shown.batteryPercent);
+    }
+    HICON pendingBadge = nullptr;
+    bool badgeWarning = badgePercent >= 0 && badgePercent < threshold;
+    bool badgeFlash = badgeWarning && ((GetTickCount64() / 1000) % 2 == 0);
+    if (badgeMode != 2 && badgePercent >= 0) {
+        if (!g_badgeIcon || g_badgeValue != badgePercent ||
+            g_badgeWarning != badgeWarning || g_badgeFlash != badgeFlash)
+            pendingBadge = CreatePercentIcon(badgePercent, badgeWarning, badgeFlash);
+        if (pendingBadge || (g_badgeValue == badgePercent &&
+                             g_badgeWarning == badgeWarning && g_badgeFlash == badgeFlash))
+            nid.hIcon = pendingBadge ? pendingBadge : g_badgeIcon;
+    }
+
+    if (!g_trayVisible) {
+        nid.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE | NIF_GUID | NIF_SHOWTIP;
+        nid.uCallbackMessage = WM_TRAY_CALLBACK;
+        if (!Shell_NotifyIconW(NIM_ADD, &nid)) {
+            Shell_NotifyIconW(NIM_DELETE, &nid);
+            Shell_NotifyIconW(NIM_ADD, &nid);
+        }
+        nid.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &nid);
+        g_trayVisible = true;
         lstrcpynW(g_lastTip, nid.szTip, ARRAYSIZE(g_lastTip));
         g_lastIcon = nid.hIcon;
-        Shell_NotifyIconW(NIM_MODIFY, &nid);
+        if (pendingBadge || nid.hIcon != g_badgeIcon) {
+            if (g_badgeIcon) DestroyIcon(g_badgeIcon);
+            g_badgeIcon = pendingBadge;
+            g_badgeValue = pendingBadge ? badgePercent : -1;
+            g_badgeWarning = badgeWarning;
+            g_badgeFlash = badgeFlash;
+        }
+    } else if (wcscmp(nid.szTip, g_lastTip) != 0 || nid.hIcon != g_lastIcon) {
+        if (Shell_NotifyIconW(NIM_MODIFY, &nid)) {
+            lstrcpynW(g_lastTip, nid.szTip, ARRAYSIZE(g_lastTip));
+            g_lastIcon = nid.hIcon;
+            if (pendingBadge || nid.hIcon != g_badgeIcon) {
+                if (g_badgeIcon) DestroyIcon(g_badgeIcon);
+                g_badgeIcon = pendingBadge;
+                g_badgeValue = pendingBadge ? badgePercent : -1;
+                g_badgeWarning = badgeWarning;
+                g_badgeFlash = badgeFlash;
+            }
+        } else if (pendingBadge) {
+            DestroyIcon(pendingBadge);
+        }
+    } else if (pendingBadge) {
+        DestroyIcon(pendingBadge);
+    }
+    if (g_alertsEnabled.load()) {
+        ULONGLONG now = GetTickCount64();
+        g_alertTicks.erase(std::remove_if(g_alertTicks.begin(), g_alertTicks.end(),
+            [now](const BatteryAlertTick& entry) { return now - entry.tick >= 3600000ULL; }),
+            g_alertTicks.end());
+        for (const auto& d : currentDevices) {
+            if (!d.connected || d.batteryPercent < 0 ||
+                d.batteryPercent > g_alertThreshold.load()) continue;
+            static const BYTE emptyAddress[6] = {};
+            if (memcmp(d.address, emptyAddress, 6) == 0) continue;
+            BatteryAlertTick* prior = nullptr;
+            for (auto& entry : g_alertTicks) {
+                if (memcmp(entry.address, d.address, 6) == 0) { prior = &entry; break; }
+            }
+            if (prior && now - prior->tick < 1800000ULL) continue;
+            NOTIFYICONDATAW alert = {sizeof(alert)};
+            alert.hWnd = hwnd;
+            alert.uID = TRAY_ICON_ID;
+            alert.guidItem = GUID_BTBAT_TRAY;
+            alert.uFlags = NIF_INFO | NIF_GUID;
+            alert.dwInfoFlags = NIIF_WARNING;
+            lstrcpynW(alert.szInfoTitle, L"Low Bluetooth battery", ARRAYSIZE(alert.szInfoTitle));
+            StringCchPrintfW(alert.szInfo, ARRAYSIZE(alert.szInfo), L"%s: %d%%",
+                             d.name.c_str(), d.batteryPercent);
+            if (Shell_NotifyIconW(NIM_MODIFY, &alert)) {
+                if (prior) prior->tick = now;
+                else {
+                    BatteryAlertTick entry = {};
+                    memcpy(entry.address, d.address, 6);
+                    entry.tick = now;
+                    g_alertTicks.push_back(entry);
+                }
+                break;  // submit another candidate on the next timer tick
+            }
+        }
     }
 }
 
@@ -927,9 +1515,11 @@ static void ApplyContextMenuTheme(HWND hWnd, bool dark) {
 }
 
 // Build and show the right-click context menu with device list, rescan, and shortcuts
-static void ShowPopupMenu() {
-    HWND hwnd = g_hwnd.load();
-    if (!IsWindow(hwnd)) return;
+static void ShowPopupMenu(HWND hwnd = nullptr) {
+    if (!IsWindow(hwnd)) {
+        hwnd = g_hwnd.load();
+        if (!IsWindow(hwnd)) return;
+    }
 
     HMENU hMenu = CreatePopupMenu();
     std::vector<DeviceInfo> currentDevices;
@@ -1018,31 +1608,33 @@ static void ShowPopupMenu() {
 // Message handler for the hidden tray window — receives TaskbarCreated, timer, device change events
 static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (g_taskbarCreatedMsg != 0 && msg == g_taskbarCreatedMsg) {
-        NOTIFYICONDATAW nid = {sizeof(nid)};
-        nid.guidItem = GUID_BTBAT_TRAY;
-        nid.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE | NIF_GUID | NIF_SHOWTIP;
-        nid.hWnd = hWnd;
-        nid.uCallbackMessage = WM_TRAY_CALLBACK;
-        nid.hIcon = g_hIconDisconnected ? g_hIconDisconnected : g_hIconMulti;
-        lstrcpynW(nid.szTip, L"BT Battery Monitor", ARRAYSIZE(nid.szTip));
-        if (!Shell_NotifyIconW(NIM_ADD, &nid)) {
-            Shell_NotifyIconW(NIM_DELETE, &nid);
-            Shell_NotifyIconW(NIM_ADD, &nid);
-        }
-        nid.uVersion = NOTIFYICON_VERSION_4;
-        Shell_NotifyIconW(NIM_SETVERSION, &nid);
-        PostMessageW(hWnd, WM_UPDATE_DEVICES, 0, 0);
+        g_trayVisible = false;
+        g_lastIcon = NULL;
+        g_lastTip[0] = L'\0';
+        UpdateTrayIcon();
         return 0;
     }
 
     switch (msg) {
-        case WM_TRAY_CALLBACK:
-            if (lParam == WM_LBUTTONUP || lParam == NIN_SELECT) {
-                if (g_rescanEvent) SetEvent(g_rescanEvent);
-            } else if (lParam == WM_CONTEXTMENU) {
-                ShowPopupMenu();
+        case WM_TRAY_CALLBACK: {
+            UINT event = LOWORD(lParam);
+            if (event == WM_LBUTTONUP || event == NIN_SELECT || event == NIN_KEYSELECT) {
+                static ULONGLONG s_lastClickTime = 0;
+                ULONGLONG now = GetTickCount64();
+                if (now - s_lastClickTime > 250) {
+                    s_lastClickTime = now;
+                    if (g_rescanEvent) SetEvent(g_rescanEvent);
+                }
+            } else if (event == WM_RBUTTONUP || event == WM_CONTEXTMENU) {
+                static ULONGLONG s_lastMenuTime = 0;
+                ULONGLONG now = GetTickCount64();
+                if (now - s_lastMenuTime > 250) {
+                    s_lastMenuTime = now;
+                    ShowPopupMenu(hWnd);
+                }
             }
             return 0;
+        }
 
         case WM_UPDATE_DEVICES:
             UpdateTrayIcon();
@@ -1061,6 +1653,7 @@ static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_RELOAD_ALL:
+            LoadSettings();
             g_lastIcon = NULL;
             g_lastTip[0] = L'\0';
             CreateIcons();
@@ -1069,10 +1662,15 @@ static LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
 
         case WM_DESTROY: {
             KillTimer(hWnd, 1);
-            NOTIFYICONDATAW nid = {sizeof(nid)};
-            nid.guidItem = GUID_BTBAT_TRAY;
-            nid.uFlags = NIF_GUID;
-            Shell_NotifyIconW(NIM_DELETE, &nid);
+            if (g_trayVisible) {
+                NOTIFYICONDATAW nid = {sizeof(nid)};
+                nid.hWnd = hWnd;
+                nid.uID = TRAY_ICON_ID;
+                nid.guidItem = GUID_BTBAT_TRAY;
+                nid.uFlags = NIF_GUID;
+                Shell_NotifyIconW(NIM_DELETE, &nid);
+                g_trayVisible = false;
+            }
             PostQuitMessage(0);
             return 0;
         }
@@ -1129,6 +1727,12 @@ static void LoadSettings() {
     if (threshold < 0) threshold = 0;
     if (threshold > 100) threshold = 100;
     g_warningThreshold.store(threshold);
+    int badgeMode = ReadIntStorage(L"badgeMode", 0);
+    g_badgeMode.store(badgeMode >= 0 && badgeMode <= 2 ? badgeMode : 0);
+    int alertThreshold = ReadIntStorage(L"alertThreshold", 15);
+    g_alertThreshold.store(alertThreshold >= 0 && alertThreshold <= 100 ? alertThreshold : 15);
+    g_alertsEnabled.store(ReadIntStorage(L"alertsEnabled", 1) != 0);
+    g_autoHideNoDevices.store(Wh_GetIntSetting(L"autoHideNoDevices") != 0);
 
     WCHAR sysPath[MAX_PATH];
     WCHAR ddoresPath[MAX_PATH] = L"ddores.dll";
@@ -1181,7 +1785,7 @@ namespace BTBatGui {
 
     // ── Layout ────────────────────────────────────────────────────────────────
     static const int kWinW   = 440;
-    static const int kTopH   =  72;
+    static const int kTopH   =  92;
     static const int kRowH   =  72;
     static const int kIconSz =  28;
     static const int kIconX  =  14;
@@ -1221,6 +1825,8 @@ namespace BTBatGui {
 
         int refreshIntervalIdx = 2;  // default: 10s
         int warningThresholdIdx = 3; // default: 30%
+        int badgeModeIdx = 0;        // default: Lowest battery (0)
+        int alertsIdx = 2;           // default: 15% (0=Off, 1=10%, 2=15%, 3=20%, 4=30%)
 
         struct IconRow {
             HWND  hIconCombo   = nullptr;
@@ -1232,6 +1838,8 @@ namespace BTBatGui {
 
         HWND hRefreshCombo = nullptr;
         HWND hThresholdCombo = nullptr;
+        HWND hBadgeCombo = nullptr;
+        HWND hAlertsCombo = nullptr;
         HWND hSaveBtn   = nullptr;
         HWND hCancelBtn = nullptr;
         HWND hKoFiBtn   = nullptr;
@@ -1276,9 +1884,13 @@ namespace BTBatGui {
         if (!s->hMainWnd) return;
         UINT d = s->dpi;
 
-        // Top row
-        SetWindowPos(s->hRefreshCombo,  nullptr, Sc(72, d), Sc(18, d), Sc(130, d), Sc(200, d), SWP_NOZORDER|SWP_NOACTIVATE);
-        SetWindowPos(s->hThresholdCombo, nullptr, Sc(268, d), Sc(18, d), Sc(90, d),  Sc(200, d), SWP_NOZORDER|SWP_NOACTIVATE);
+        // Top section: Row 1
+        SetWindowPos(s->hRefreshCombo,   nullptr, Sc(72, d),  Sc(16, d), Sc(134, d), Sc(200, d), SWP_NOZORDER|SWP_NOACTIVATE);
+        SetWindowPos(s->hThresholdCombo, nullptr, Sc(280, d), Sc(16, d), Sc(134, d), Sc(200, d), SWP_NOZORDER|SWP_NOACTIVATE);
+
+        // Top section: Row 2
+        SetWindowPos(s->hBadgeCombo,     nullptr, Sc(72, d),  Sc(50, d), Sc(134, d), Sc(200, d), SWP_NOZORDER|SWP_NOACTIVATE);
+        SetWindowPos(s->hAlertsCombo,    nullptr, Sc(280, d), Sc(50, d), Sc(134, d), Sc(200, d), SWP_NOZORDER|SWP_NOACTIVATE);
 
         for (int i = 0; i < 6; i++) {
             int y = RowY(i, d);
@@ -1320,6 +1932,20 @@ namespace BTBatGui {
         s.warningThresholdIdx = 3; // default 30
         for (int i = 0; i < 6; i++) {
             if (currentThreshold == threshVals[i]) { s.warningThresholdIdx = i; break; }
+        }
+
+        int currentBadge = ReadIntStorage(L"badgeMode", 0);
+        s.badgeModeIdx = (currentBadge >= 0 && currentBadge <= 2) ? currentBadge : 0;
+
+        bool alertsOn = ReadIntStorage(L"alertsEnabled", 1) != 0;
+        if (!alertsOn) {
+            s.alertsIdx = 0;
+        } else {
+            int at = ReadIntStorage(L"alertThreshold", 15);
+            if (at <= 10) s.alertsIdx = 1;
+            else if (at <= 15) s.alertsIdx = 2;
+            else if (at <= 20) s.alertsIdx = 3;
+            else s.alertsIdx = 4;
         }
 
         for (int i = 0; i < 6; i++) {
@@ -1386,6 +2012,30 @@ namespace BTBatGui {
             SendMessageW(s->hThresholdCombo, CB_SETCURSEL, s->warningThresholdIdx, 0);
             DarkCombo(s->hThresholdCombo);
 
+            // Badge mode combo
+            s->hBadgeCombo = CreateWindowExW(WS_EX_CLIENTEDGE, L"COMBOBOX", nullptr,
+                WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST, 0, 0, 100, 200,
+                hWnd, (HMENU)(UINT_PTR)102, hInst, nullptr);
+            static const WCHAR* kBadgeLabels[] = {
+                L"Lowest battery", L"Cycle devices", L"Off (show icon)"
+            };
+            for (int i = 0; i < 3; i++)
+                SendMessageW(s->hBadgeCombo, CB_ADDSTRING, 0, (LPARAM)kBadgeLabels[i]);
+            SendMessageW(s->hBadgeCombo, CB_SETCURSEL, s->badgeModeIdx, 0);
+            DarkCombo(s->hBadgeCombo);
+
+            // Low battery alerts combo
+            s->hAlertsCombo = CreateWindowExW(WS_EX_CLIENTEDGE, L"COMBOBOX", nullptr,
+                WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST, 0, 0, 100, 200,
+                hWnd, (HMENU)(UINT_PTR)103, hInst, nullptr);
+            static const WCHAR* kAlertLabels[] = {
+                L"Off", L"10%", L"15%", L"20%", L"30%"
+            };
+            for (int i = 0; i < 5; i++)
+                SendMessageW(s->hAlertsCombo, CB_ADDSTRING, 0, (LPARAM)kAlertLabels[i]);
+            SendMessageW(s->hAlertsCombo, CB_SETCURSEL, s->alertsIdx, 0);
+            DarkCombo(s->hAlertsCombo);
+
             // Per-device rows
             for (int i = 0; i < 6; i++) {
                 s->rows[i].hIconCombo = CreateWindowExW(WS_EX_CLIENTEDGE, L"COMBOBOX", nullptr,
@@ -1441,17 +2091,24 @@ namespace BTBatGui {
             if (!s) { PAINTSTRUCT ps; BeginPaint(hWnd, &ps); EndPaint(hWnd, &ps); return 0; }
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
-            SelectObject(hdc, s->hFont);
+            HFONT hOldFont = (HFONT)SelectObject(hdc, s->hFont);
             SetBkMode(hdc, TRANSPARENT);
             UINT d = s->dpi;
 
             // Top section labels
             SetTextColor(hdc, kClrDim);
             RECT r;
-            r = {Sc(12, d), Sc(22, d), Sc(70, d), Sc(38, d)};
+            // Row 1
+            r = {Sc(12, d), Sc(20, d), Sc(70, d), Sc(36, d)};
             DrawTextW(hdc, L"Polling:", -1, &r, DT_LEFT|DT_TOP);
-            r = {Sc(216, d), Sc(22, d), Sc(266, d), Sc(38, d)};
+            r = {Sc(220, d), Sc(20, d), Sc(278, d), Sc(36, d)};
             DrawTextW(hdc, L"Warning:", -1, &r, DT_LEFT|DT_TOP);
+
+            // Row 2
+            r = {Sc(12, d), Sc(54, d), Sc(70, d), Sc(70, d)};
+            DrawTextW(hdc, L"Badge:", -1, &r, DT_LEFT|DT_TOP);
+            r = {Sc(220, d), Sc(54, d), Sc(278, d), Sc(70, d)};
+            DrawTextW(hdc, L"Alerts:", -1, &r, DT_LEFT|DT_TOP);
 
             // Separator
             {
@@ -1493,6 +2150,7 @@ namespace BTBatGui {
                 }
             }
 
+            SelectObject(hdc, hOldFont);
             EndPaint(hWnd, &ps);
             return 0;
         }
@@ -1538,8 +2196,9 @@ namespace BTBatGui {
             WCHAR txt[64] = {}; GetWindowTextW(dis->hwndItem, txt, 64);
             SetTextColor(dis->hDC, kClrText);
             SetBkMode(dis->hDC, TRANSPARENT);
-            SelectObject(dis->hDC, s->hFont);
+            HFONT hOldFont = (HFONT)SelectObject(dis->hDC, s->hFont);
             DrawTextW(dis->hDC, txt, -1, &dis->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(dis->hDC, hOldFont);
             if (dis->itemState & ODS_FOCUS) DrawFocusRect(dis->hDC, &dis->rcItem);
             return TRUE;
         }
@@ -1601,6 +2260,29 @@ namespace BTBatGui {
                     WCHAR num[16];
                     swprintf_s(num, L"%d", threshVals[ti]);
                     Wh_SetStringValue(L"warningThreshold", num);
+                }
+
+                int bi = (int)SendMessageW(s->hBadgeCombo, CB_GETCURSEL, 0, 0);
+                if (bi != CB_ERR && bi >= 0 && bi <= 2) {
+                    g_badgeMode.store(bi);
+                    WCHAR num[4];
+                    swprintf_s(num, L"%d", bi);
+                    Wh_SetStringValue(L"badgeMode", num);
+                }
+
+                int ai = (int)SendMessageW(s->hAlertsCombo, CB_GETCURSEL, 0, 0);
+                if (ai == 0) {
+                    g_alertsEnabled.store(false);
+                    Wh_SetStringValue(L"alertsEnabled", L"0");
+                } else if (ai >= 1 && ai <= 4) {
+                    const int levels[] = {10, 15, 20, 30};
+                    int level = levels[ai - 1];
+                    g_alertsEnabled.store(true);
+                    g_alertThreshold.store(level);
+                    Wh_SetStringValue(L"alertsEnabled", L"1");
+                    WCHAR num[8];
+                    swprintf_s(num, L"%d", level);
+                    Wh_SetStringValue(L"alertThreshold", num);
                 }
 
                 for (int i = 0; i < 6; i++) {
@@ -1747,9 +2429,11 @@ namespace BTBatGui {
 
 // Hidden window thread — registers the tray icon, listens for events, runs message pump
 static unsigned int __stdcall TrayThreadProc(void*) {
+    Wh_Log(L"[BTBat] TrayThreadProc entered");
+
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hrCo) && hrCo != RPC_E_CHANGED_MODE) {
-        Wh_Log(L"CoInitializeEx failed: 0x%08X", hrCo);
+        Wh_Log(L"[BTBat] CoInitializeEx failed: 0x%08X", hrCo);
         return 1;
     }
 
@@ -1758,7 +2442,7 @@ static unsigned int __stdcall TrayThreadProc(void*) {
     wc.hInstance = GetModuleHandleW(NULL);
     wc.lpszClassName = L"BTBatTrayWindow";
     if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        Wh_Log(L"RegisterClassW failed (%u)", GetLastError());
+        Wh_Log(L"[BTBat] RegisterClassW failed (%u)", GetLastError());
         if (SUCCEEDED(hrCo)) CoUninitialize();
         return 1;
     }
@@ -1774,10 +2458,11 @@ static unsigned int __stdcall TrayThreadProc(void*) {
         NULL);
 
     if (!hWnd) {
-        Wh_Log(L"CreateWindowExW failed (%u)", GetLastError());
+        Wh_Log(L"[BTBat] CreateWindowExW failed (%u)", GetLastError());
         if (SUCCEEDED(hrCo)) CoUninitialize();
         return 1;
     }
+    Wh_Log(L"[BTBat] tray hwnd=%p", (void*)hWnd);
     g_hwnd.store(hWnd);
     SetTimer(hWnd, 1, 1000, NULL);
 
@@ -1795,19 +2480,32 @@ static unsigned int __stdcall TrayThreadProc(void*) {
 
     g_taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
-    NOTIFYICONDATAW nid = {sizeof(nid)};
-    nid.guidItem = GUID_BTBAT_TRAY;
-    nid.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE | NIF_GUID | NIF_SHOWTIP;
-    nid.hWnd = hWnd;
-    nid.uCallbackMessage = WM_TRAY_CALLBACK;
-    nid.hIcon = g_hIconDisconnected ? g_hIconDisconnected : g_hIconMulti;
-    lstrcpynW(nid.szTip, L"BT Battery Monitor", ARRAYSIZE(nid.szTip));
-    if (!Shell_NotifyIconW(NIM_ADD, &nid)) {
-        Shell_NotifyIconW(NIM_DELETE, &nid);
-        Shell_NotifyIconW(NIM_ADD, &nid);
+    if (!g_autoHideNoDevices.load()) {
+        NOTIFYICONDATAW nid = {sizeof(nid)};
+        nid.guidItem = GUID_BTBAT_TRAY;
+        nid.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE | NIF_GUID | NIF_SHOWTIP;
+        nid.hWnd = hWnd;
+        nid.uID = TRAY_ICON_ID;
+        nid.uCallbackMessage = WM_TRAY_CALLBACK;
+        nid.hIcon = g_hIconDisconnected ? g_hIconDisconnected : g_hIconMulti;
+        Wh_Log(L"[BTBat] NIM_ADD icon=%p tip=%s", (void*)nid.hIcon, nid.szTip);
+        lstrcpynW(nid.szTip, L"BT Battery Monitor", ARRAYSIZE(nid.szTip));
+        if (!Shell_NotifyIconW(NIM_ADD, &nid)) {
+            Wh_Log(L"[BTBat] NIM_ADD failed (%u), retrying with NIM_DELETE", GetLastError());
+            Shell_NotifyIconW(NIM_DELETE, &nid);
+            if (!Shell_NotifyIconW(NIM_ADD, &nid))
+                Wh_Log(L"[BTBat] NIM_ADD retry also failed (%u)", GetLastError());
+            else
+                Wh_Log(L"[BTBat] NIM_ADD retry succeeded");
+        } else {
+            Wh_Log(L"[BTBat] NIM_ADD succeeded");
+        }
+        nid.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &nid);
+        g_trayVisible = true;
+    } else {
+        g_trayVisible = false;
     }
-    nid.uVersion = NOTIFYICON_VERSION_4;
-    Shell_NotifyIconW(NIM_SETVERSION, &nid);
 
     DEV_BROADCAST_DEVICEINTERFACE_W filter = { sizeof(filter) };
     filter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
@@ -1845,21 +2543,23 @@ BOOL WhTool_ModInit() {
     if (InterlockedCompareExchange(&g_initComplete, TRUE, FALSE))
         return TRUE;
 
-    Wh_Log(L"Initializing");
+    Wh_Log(L"[BTBat] WhTool_ModInit entered");
 
     INITCOMMONCONTROLSEX icex = {sizeof(icex), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icex);
 
     DWORD len = GetModuleFileNameW(nullptr, g_windhawkPath, ARRAYSIZE(g_windhawkPath));
     switch (len) {
-        case 0: return FALSE;
-        case ARRAYSIZE(g_windhawkPath): return FALSE;
+        case 0: Wh_Log(L"[BTBat] GetModuleFileNameW failed"); return FALSE;
+        case ARRAYSIZE(g_windhawkPath): Wh_Log(L"[BTBat] path truncated"); return FALSE;
     }
+    Wh_Log(L"[BTBat] path=%s", g_windhawkPath);
 
     if (!CreateIcons()) {
-        Wh_Log(L"Failed to create icons");
+        Wh_Log(L"[BTBat] CreateIcons failed");
         return FALSE;
     }
+    Wh_Log(L"[BTBat] icons created (disco=%p multi=%p)", (void*)g_hIconDisconnected, (void*)g_hIconMulti);
 
     InitializeCriticalSection(&g_devicesLock);
 
@@ -1867,7 +2567,7 @@ BOOL WhTool_ModInit() {
     g_rescanEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
 
     if (!g_shutdownEvent || !g_rescanEvent) {
-        Wh_Log(L"Failed to create events (%u)", GetLastError());
+        Wh_Log(L"[BTBat] CreateEvent failed (%u)", GetLastError());
         if (g_shutdownEvent) CloseHandle(g_shutdownEvent);
         if (g_rescanEvent) CloseHandle(g_rescanEvent);
         g_shutdownEvent = g_rescanEvent = NULL;
@@ -1878,7 +2578,7 @@ BOOL WhTool_ModInit() {
 
     g_scannerThread = (HANDLE)_beginthreadex(NULL, 0, ScannerProc, NULL, 0, NULL);
     if (!g_scannerThread) {
-        Wh_Log(L"Failed to create scanner thread");
+        Wh_Log(L"[BTBat] scanner thread creation failed (%u)", GetLastError());
         SetEvent(g_shutdownEvent);
         if (g_shutdownEvent) CloseHandle(g_shutdownEvent);
         if (g_rescanEvent) CloseHandle(g_rescanEvent);
@@ -1887,10 +2587,11 @@ BOOL WhTool_ModInit() {
         DestroyIcons();
         return FALSE;
     }
+    Wh_Log(L"[BTBat] scanner thread created");
 
     g_trayThread = (HANDLE)_beginthreadex(NULL, 0, TrayThreadProc, NULL, 0, NULL);
     if (!g_trayThread) {
-        Wh_Log(L"Failed to create tray thread");
+        Wh_Log(L"[BTBat] tray thread creation failed (%u)", GetLastError());
         SetEvent(g_shutdownEvent);
         WaitForSingleObject(g_scannerThread, 3000);
         CloseHandle(g_scannerThread);
@@ -1902,14 +2603,16 @@ BOOL WhTool_ModInit() {
         DestroyIcons();
         return FALSE;
     }
+    Wh_Log(L"[BTBat] tray thread created");
 
-    Wh_Log(L"Initialized");
+    Wh_Log(L"[BTBat] WhTool_ModInit done, returning TRUE");
     return TRUE;
 }
 
 // Reload settings and refresh all icons
 void WhTool_ModSettingsChanged() {
     Wh_Log(L"Settings changed");
+    g_autoHideNoDevices.store(Wh_GetIntSetting(L"autoHideNoDevices") != 0);
     HWND hwnd = g_hwnd.load();
     if (IsWindow(hwnd))
         PostMessageW(hwnd, WM_RELOAD_ALL, 0, 0);
