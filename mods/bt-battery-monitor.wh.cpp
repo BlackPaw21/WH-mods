@@ -260,6 +260,7 @@ static const WORD g_knownHidVidPids[][2] = {
 };
 
 namespace BTBatGui {
+    void BringToForeground(HWND hWnd);
     HANDLE LaunchDashboard(HWND hTrayHwnd);
 }
 
