@@ -1,14 +1,14 @@
 // ==WindhawkMod==
 // @id              net-toggle
 // @name            Net-Toggle
-// @description     Internet kill switch with primary/secondary DNS monitoring in your system tray
-// @version         2.1.1
+// @description     Toggle physical adapters and monitor DNS status from the system tray
+// @version         2.2.0
 // @author          BlackPaw
 // @github          https://github.com/BlackPaw21
 // @donateUrl       https://ko-fi.com/blackpaw21
 // @license         MIT
 // @include         windhawk.exe
-// @compilerOptions -lshell32 -lgdi32 -luser32 -lole32 -luuid -liphlpapi -lws2_32 -ladvapi32 -DWIN32_LEAN_AND_MEAN
+// @compilerOptions -lshell32 -lgdi32 -luser32 -lole32 -luuid -liphlpapi -lws2_32 -ladvapi32 -lsetupapi -lcfgmgr32 -DWIN32_LEAN_AND_MEAN -ffp-exception-behavior=maytrap
 // ==/WindhawkMod==
 
 // ==WindhawkModSettings==
@@ -51,11 +51,13 @@
 /*
 # Net-Toggle
 
-A lightning-fast internet kill switch with DNS reachability monitoring — right in your taskbar!
+Quickly turn your network on or off with a double-click right from your system tray. Net-Toggle lets you easily manage your network hardware, toggle Wi-Fi, and monitor your connection health and ping at a glance.
 
-Ever needed to quickly disconnect from the web without digging through Windows settings or ripping the ethernet cable out of the wall? Net-Toggle adds a clean, native-looking button directly to your system tray.
+![Net-Toggle Context Menu](https://i.imgur.com/DWezrMb.png)
 
-One click drops your connection. Click it again, and you're back online.
+Hover over the tray icon at any time to see live connection details:
+- **DNS:** Confirms if domain name lookup is working properly.
+- **ICMP:** Your ping — measures response latency (in milliseconds) and packet loss to show connection speed and stability.
 
 ## Colors Legend (Tray Icon)
 
@@ -67,9 +69,9 @@ One click drops your connection. Click it again, and you're back online.
 
 ![Yellow](https://i.imgur.com/rvXLTas.png)
 
-**🟢 Green** — Network is ON, DNS is reachable
+**🟢 Green** — Network is ON, connection is healthy
 
-![Green](https://i.imgur.com/nA2DWu9.png)
+![Green](https://i.imgur.com/l3UjhAQ.png)
 
 **🟠 Orange** — Network is ON, primary DNS is down — the secondary (fallback) DNS is still answering
 
@@ -85,28 +87,29 @@ One click drops your connection. Click it again, and you're back online.
 
 ## How to Use It
 
-1. **Find the Icon:** Look in your system tray (bottom right of your screen, next to the clock) for the little `^` arrow. Hit it and look for the network icon.
-2. **Left-click to Toggle:** Give the icon a single click.
-3. **Middle-click for Full Reset:** Middle-click the icon to run a full network cycle reset — disables all adapters, flushes DNS, then re-enables them. This cuts all active connections.
-4. **Right-click for Menu:** Disable/Enable network, open Network Settings, or open Windhawk.
-5. **Approve the Prompt (on toggle/reset):** Windows will pop up a quick UAC screen asking for permission. Click **Yes**.
-
-   > **Why do I need to accept the UAC?**
-   >
-   > Windows requires admin permission to physically turn off your network hardware or reset your connection.
-   >
-   > This is a built-in security feature to stop rogue background apps from doing this secretly.
-
-6. (optional) **Configure DNS Monitoring:** In Windhawk mod settings, enter your primary DNS server IP (e.g. `8.8.8.8`) — and optionally a secondary (e.g. `8.8.4.4`). Pick a check method per server: a **real DNS query** (default, most accurate), or a TCP reachability check on port 53, 853 (DNS-over-TLS) or 443 (DNS-over-HTTPS) for endpoints like NextDNS.
-
-   > **Which check method should I pick?**
-   >
-   > - **Real DNS Query** *(default)* — Actually resolves a name; most accurate, right for almost everyone.
-   > - **TCP 53** — Just checks if the DNS port responds; use if your network blocks real queries but allows plain connections.
-   > - **DNS-over-TLS (853)** — Checks an encrypted DoT endpoint; use if your provider is set up for DoT.
-   > - **DNS-over-HTTPS (443)** — Checks a DoH endpoint; use when your provider is only reachable over HTTPS (e.g. NextDNS, Cloudflare).
+1. **Find the Icon:** Look in your system tray (bottom-right corner, next to the clock) for the network icon. If it is hidden, click the `^` arrow.
+2. **Double-click to Toggle:** Double-click the icon to toggle your physical network adapters on or off (double-click prevents accidental disconnects).
+3. **Middle-click to Reset:** Quickly resets your network connection by cycling adapters and flushing the DNS cache.
+4. **Right-click for Menu:** Manage individual adapters, toggle Wi-Fi adapters, open Windows Network Settings, or open Windhawk.
+5. **Approve the Windows Prompt:** When toggling or resetting, Windows will show a UAC prompt asking for permission. Click **Yes** (Windows requires administrator permission to change hardware states).
+6. **(Optional) Configure DNS Monitoring:** In Windhawk mod settings, enter your preferred DNS server (like `8.8.8.8` or `1.1.1.1`) and optionally a backup server (like `8.8.4.4`).
+   - **Real DNS Query** *(Default)* — Recommended for almost everyone; accurately tests real domain resolution.
+   - **TCP / DoT / DoH** — Use if your network filters standard UDP queries and you monitor custom endpoints.
 
 ## Changelog
+
+# 2.2.0
+- **New:** Submenu listing physical adapters by unique GUID to individually toggle adapters on or off.
+- **New:** Direct Wi-Fi adapter toggle in the right-click menu ("Disable Wifi Adapters" / "Enable Wifi Adapters").
+- **New:** DNS monitoring tooltip now displays live ICMP round-trip time (RTT) and sample loss statistics.
+- **Improved:** Tray icon toggle now triggers on double-click instead of single click to prevent accidental network disconnections.
+- **Improved:** Adapter inventory filters out virtual adapters and hidden miniports to show only physical hardware.
+- **Improved:** Adapters submenu dynamically refreshes adapter states whenever the submenu opens.
+- **Improved:** Reduced click cooldown from 10s to 2s for a significantly more responsive tray experience.
+- **Fixed:** Eliminated DHCP race condition where the tray icon prematurely showed offline immediately after re-enabling adapters.
+- **Fixed:** Network toggling now reliably restores connectivity without requiring a full reset or middle-click.
+- **Fixed:** Corrected network notification handle cancellation and hardened elevated command verification.
+- **Fixed:** Replaced unbounded thread wait during uninitialization with a bounded wait for clean shutdown.
 
 # 2.1.1
 - **Fixed:** Mod no longer crashes on reload.
@@ -151,6 +154,14 @@ One click drops your connection. Click it again, and you're back online.
 #include <propkey.h>
 #include <propidl.h>
 #include <iphlpapi.h>
+#include <icmpapi.h>
+#include <setupapi.h>
+#include <devguid.h>
+#include <cfgmgr32.h>
+#include <netioapi.h>
+#include <vector>
+#include <new>
+#include <strsafe.h>
 #include <math.h>
 
 #define TRAY_ICON_ID 1
@@ -162,6 +173,8 @@ One click drops your connection. Click it again, and you're back online.
 #define DNS_RECOVERY_TIMER_ID 3
 
 #define MENU_TOGGLE_NET    1
+#define MENU_TOGGLE_WIFI   3
+#define MENU_ADAPTER_FIRST 100
 #define MENU_NET_SETTINGS  2
 #define MENU_OPEN_WINDHAWK 9000
 
@@ -169,9 +182,9 @@ One click drops your connection. Click it again, and you're back online.
 static const GUID NETTOGGLE_TRAY_GUID =
     {0x246764CF, 0xF857, 0x4399, {0x8D, 0x3D, 0x22, 0x76, 0x1A, 0x6A, 0xBD, 0x95}};
 
-const DWORD CLICK_DEBOUNCE_MS = 10000;
+const DWORD CLICK_DEBOUNCE_MS = 2000;
+static volatile DWORD g_enableGracePeriodUntilTick = 0;
 
-static const DWORD POWERSHELL_TIMEOUT_MS  = 60000;  // 60s max for any PS command
 static const DWORD NETWATCH_POLL_INTERVAL = 15000;  // 15s per fallback poll tick
 static const DWORD NETWATCH_POLL_RETRIES  = 4;      // 4 × 15s = 60s then retry NotifyAddrChange
 static const int   MIN_PING_INTERVAL_SEC  = 5;
@@ -184,6 +197,7 @@ static const int   DNS_UDP_WAIT_USEC      = 250000;  // …1.25s each, 2.5s wors
 static LONG g_isProcessingClick = 0;
 static LONG g_trayIconInstalled = 0;
 static LONG g_networkIsUp = 1;
+static volatile LONG g_networkStateKnown = 0;
 static HANDLE g_trayThread = nullptr;
 static volatile HWND g_trayHwnd = nullptr;
 static HINSTANCE g_hInstance = nullptr;
@@ -195,6 +209,20 @@ static HANDLE g_activeWorkerThread = nullptr;
 static volatile LONG g_dnsIp[2]    = {0, 0};    // IPv4, network byte order; 0 = unconfigured
 static volatile LONG g_dnsProbe[2] = {0, 0};    // DnsProbeMethod per slot
 static volatile LONG g_dnsUp[2]    = {-1, -1};  // -1 = not checked yet, 0 = down, 1 = up
+static volatile LONG g_dnsGeneration = 0;
+static volatile LONG g_networkGeneration = 0;
+static volatile LONG g_lastNotifiedNetworkState = -1;
+struct IcmpResult { DWORD ip; LONG generation; int slot; int status; DWORD rtt; };
+struct IcmpHistory {
+    DWORD ip = 0;
+    BYTE samples[10] = {};
+    int count = 0;
+    int next = 0;
+    int status = -1;  // unknown, completed failure, success
+    DWORD rtt = 0;
+};
+static IcmpHistory g_icmpHistory[2];
+static SRWLOCK g_icmpLock = SRWLOCK_INIT;
 static DWORD g_pingIntervalMs = 10000;
 static volatile LONG g_dnsWorkerRunning = 0;
 static HANDLE g_dnsWorkerThread = nullptr;
@@ -228,54 +256,122 @@ void LogLastError(LPCWSTR context) {
     }
 }
 
-BOOL CheckActualNetworkState() {
-    // Without GAA_FLAG_INCLUDE_ALL_INTERFACES, GetAdaptersAddresses only returns
-    // adapters that have at least one IP address assigned. Disabled adapters have
-    // no IP address and therefore do not appear — they return a count of 0.
-    // (Disabled-NetAdapter sets IfOperStatusDown, not IfOperStatusNotPresent, so
-    // filtering on OperStatus is unreliable for detecting administratively disabled
-    // adapters. Relying on the OS to exclude address-less entries is cleaner.)
-    // GetAdaptersAddresses uses a separate internal code path from
-    // NotifyAddrChange/GetIfTable2, avoiding an iphlpapi.dll shared-handle
-    // contamination that causes GetIfTable2 to return ERROR_INVALID_HANDLE after
-    // NotifyAddrChange fails in injected contexts.
-    ULONG flags = GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_ANYCAST |
-                  GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
-    ULONG size = 16384;
-    BYTE* buf = (BYTE*)HeapAlloc(GetProcessHeap(), 0, size);
-    if (!buf) return TRUE;
+struct AdapterInfo {
+    GUID id = {};
+    WCHAR name[128] = {};
+    int admin = -1; // -1 unknown, 0 disabled, 1 enabled
+    bool physical = false;
+    bool isWifi = false;
+};
 
-    ULONG ret = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr,
-                                     (IP_ADAPTER_ADDRESSES*)buf, &size);
-    if (ret == ERROR_BUFFER_OVERFLOW) {
-        HeapFree(GetProcessHeap(), 0, buf);
-        buf = (BYTE*)HeapAlloc(GetProcessHeap(), 0, size);
-        if (!buf) return TRUE;
-        ret = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr,
-                                   (IP_ADAPTER_ADDRESSES*)buf, &size);
+static bool ContainsCaseInsensitive(const WCHAR* haystack, const WCHAR* needle) {
+    if (!haystack || !needle) return false;
+    size_t needleLen = wcslen(needle);
+    size_t haystackLen = wcslen(haystack);
+    if (needleLen > haystackLen) return false;
+    for (size_t i = 0; i <= haystackLen - needleLen; ++i) {
+        if (_wcsnicmp(&haystack[i], needle, needleLen) == 0) return true;
     }
-    if (ret != NO_ERROR) {
-        Wh_Log(L"GetAdaptersAddresses failed (%lu), assuming ON", ret);
-        HeapFree(GetProcessHeap(), 0, buf);
-        return TRUE;
-    }
-
-    int count = 0;
-    for (IP_ADAPTER_ADDRESSES* aa = (IP_ADAPTER_ADDRESSES*)buf; aa; aa = aa->Next) {
-        if (aa->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
-        if (aa->IfType == IF_TYPE_TUNNEL) continue;
-        if (aa->PhysicalAddressLength == 0) continue;
-        count++;
-    }
-    HeapFree(GetProcessHeap(), 0, buf);
-    return count > 0;
+    return false;
 }
 
-BOOL RunPowerShellCommand(LPCWSTR psCommand, BOOL targetState) {
+static bool EnumerateAdapters(std::vector<AdapterInfo>& adapters) {
+    HDEVINFO devices = SetupDiGetClassDevsW(&GUID_DEVCLASS_NET, nullptr, nullptr, DIGCF_PRESENT);
+    if (devices == INVALID_HANDLE_VALUE) return false;
+    for (DWORD index = 0;; ++index) {
+        SP_DEVINFO_DATA device = {sizeof(device)};
+        if (!SetupDiEnumDeviceInfo(devices, index, &device)) break;
+        HKEY key = SetupDiOpenDevRegKey(devices, &device, DICS_FLAG_GLOBAL, 0, DIREG_DRV, KEY_READ);
+        if (key == INVALID_HANDLE_VALUE) continue;
+        WCHAR idText[64] = {};
+        DWORD bytes = sizeof(idText), type = 0;
+        LONG status = RegQueryValueExW(key, L"NetCfgInstanceId", nullptr, &type,
+                                       reinterpret_cast<BYTE*>(idText), &bytes);
+        if (status != ERROR_SUCCESS || type != REG_SZ || bytes > sizeof(idText)) {
+            RegCloseKey(key);
+            continue;
+        }
+
+        DWORD characteristics = 0;
+        DWORD charBytes = sizeof(characteristics);
+        DWORD charType = 0;
+        bool hasChar = (RegQueryValueExW(key, L"Characteristics", nullptr, &charType,
+                                         reinterpret_cast<BYTE*>(&characteristics), &charBytes) == ERROR_SUCCESS && charType == REG_DWORD);
+        RegCloseKey(key);
+
+        idText[ARRAYSIZE(idText) - 1] = L'\0';
+        AdapterInfo adapter;
+        if (FAILED(CLSIDFromString(idText, &adapter.id))) continue;
+        DWORD propertyType = 0;
+        if (!SetupDiGetDeviceRegistryPropertyW(devices, &device, SPDRP_FRIENDLYNAME,
+                &propertyType, reinterpret_cast<BYTE*>(adapter.name), sizeof(adapter.name), nullptr))
+            SetupDiGetDeviceRegistryPropertyW(devices, &device, SPDRP_DEVICEDESC,
+                &propertyType, reinterpret_cast<BYTE*>(adapter.name), sizeof(adapter.name), nullptr);
+        adapter.name[ARRAYSIZE(adapter.name) - 1] = L'\0';
+
+        if (hasChar) {
+            adapter.physical = (characteristics & 0x04) != 0; // NCF_PHYSICAL
+        }
+
+        if (ContainsCaseInsensitive(adapter.name, L"Wi-Fi") ||
+            ContainsCaseInsensitive(adapter.name, L"WiFi") ||
+            ContainsCaseInsensitive(adapter.name, L"Wireless") ||
+            ContainsCaseInsensitive(adapter.name, L"802.11") ||
+            ContainsCaseInsensitive(adapter.name, L"WLAN")) {
+            adapter.isWifi = true;
+        }
+
+        MIB_IF_ROW2 row = {};
+        row.InterfaceGuid = adapter.id;
+        if (GetIfEntry2(&row) == NO_ERROR) {
+            adapter.admin = row.AdminStatus == NET_IF_ADMIN_STATUS_UP ? 1 : 0;
+            if (!hasChar) {
+                adapter.physical = row.InterfaceAndOperStatusFlags.HardwareInterface != FALSE;
+            }
+            if (row.Type == IF_TYPE_IEEE80211 || row.MediaType == NdisMediumNative802_11) {
+                adapter.isWifi = true;
+            }
+        } else {
+            ULONG flags = 0, problem = 0;
+            if (CM_Get_DevNode_Status(&flags, &problem, device.DevInst, 0) == CR_SUCCESS) {
+                if (problem == CM_PROB_DISABLED) adapter.admin = 0;
+                else if (flags & DN_STARTED) adapter.admin = 1;
+            }
+        }
+        adapters.push_back(adapter);
+    }
+    SetupDiDestroyDeviceInfoList(devices);
+    return true;
+}
+
+BOOL CheckActualNetworkState() {
+    std::vector<AdapterInfo> adapters;
+    if (!EnumerateAdapters(adapters)) {
+        if (InterlockedExchange(&g_networkStateKnown, 0) != 0) InterlockedIncrement(&g_networkGeneration);
+        Wh_Log(L"Network adapter inventory unavailable");
+        return InterlockedOr(&g_networkIsUp, 0) == 1;
+    }
+    bool anyRelevant = false, anyEnabled = false, unresolved = false;
+    for (const auto& adapter : adapters) {
+        if (!adapter.physical) continue;
+        anyRelevant = true;
+        if (adapter.admin == 1) anyEnabled = true;
+        if (adapter.admin < 0) unresolved = true;
+    }
+    if (!anyRelevant || (unresolved && !anyEnabled)) {
+        if (InterlockedExchange(&g_networkStateKnown, 0) != 0) InterlockedIncrement(&g_networkGeneration);
+        return InterlockedOr(&g_networkIsUp, 0) == 1;
+    }
+    if (InterlockedExchange(&g_networkStateKnown, 1) != 1) InterlockedIncrement(&g_networkGeneration);
+    return anyEnabled;
+}
+
+BOOL RunPowerShellCommand(LPCWSTR psCommand) {
     Wh_Log(L"Executing PowerShell command");
 
     WCHAR cmdArgs[2048];
-    if (wsprintfW(cmdArgs, L"-NoProfile -NonInteractive -WindowStyle Hidden -Command \"%s\"", psCommand) <= 0) {
+    if (FAILED(StringCchPrintfW(cmdArgs, ARRAYSIZE(cmdArgs),
+        L"-NoProfile -NonInteractive -WindowStyle Hidden -Command \"$ErrorActionPreference='Stop'; %s\"", psCommand))) {
         Wh_Log(L"Failed to format command");
         return FALSE;
     }
@@ -284,7 +380,11 @@ BOOL RunPowerShellCommand(LPCWSTR psCommand, BOOL targetState) {
     sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE;
     sei.hwnd = nullptr;
     sei.lpVerb = L"runas";
-    sei.lpFile = L"powershell.exe";
+    WCHAR powershellPath[MAX_PATH];
+    if (!GetSystemDirectoryW(powershellPath, ARRAYSIZE(powershellPath)) ||
+        FAILED(StringCchCatW(powershellPath, ARRAYSIZE(powershellPath),
+                             L"\\WindowsPowerShell\\v1.0\\powershell.exe"))) return FALSE;
+    sei.lpFile = powershellPath;
     sei.lpParameters = cmdArgs;
     sei.nShow = SW_HIDE;
 
@@ -305,10 +405,21 @@ BOOL RunPowerShellCommand(LPCWSTR psCommand, BOOL targetState) {
         return FALSE;
     }
 
-    DWORD waitResult = WaitForSingleObject(sei.hProcess, POWERSHELL_TIMEOUT_MS);
-    if (waitResult == WAIT_TIMEOUT) {
-        Wh_Log(L"Process timed out, terminating");
-        TerminateProcess(sei.hProcess, 1);
+    DWORD waitResult;
+    bool overdue = false;
+    do {
+        waitResult = WaitForSingleObject(sei.hProcess, 5000);
+        if (waitResult == WAIT_TIMEOUT && !overdue) {
+            Wh_Log(L"PowerShell still running; keeping adapter operation busy");
+            overdue = true;
+        }
+        if (waitResult == WAIT_TIMEOUT && g_shutdownEvent &&
+            WaitForSingleObject(g_shutdownEvent, 0) == WAIT_OBJECT_0) {
+            CloseHandle(sei.hProcess);
+            return FALSE;
+        }
+    } while (waitResult == WAIT_TIMEOUT);
+    if (waitResult != WAIT_OBJECT_0) {
         CloseHandle(sei.hProcess);
         return FALSE;
     }
@@ -323,7 +434,6 @@ BOOL RunPowerShellCommand(LPCWSTR psCommand, BOOL targetState) {
     CloseHandle(sei.hProcess);
     Wh_Log(L"Process exited with code: %d", exitCode);
     if (exitCode == 0) {
-        InterlockedExchange(&g_networkIsUp, targetState ? 1 : 0);
         return TRUE;
     } else {
         Wh_Log(L"PowerShell command failed (exit %d) — network state unchanged", exitCode);
@@ -353,11 +463,7 @@ enum DnsOverall {
 
 // TCP handshake to the given port. Success only when the connect completes —
 // for DoT (853) / DoH (443) endpoints and explicit TCP:53 checks, a refused
-// connection means the service is down. ICMP (IcmpSendEcho) is deliberately
-// avoided: IcmpCreateFile fails with ERROR_INVALID_HANDLE (6) inside this
-// process after Disable-NetAdapter removes all adapters from the IP stack —
-// the ICMP kernel device path doesn't recover until the process restarts.
-// Winsock sockets are not affected by adapter disable/enable cycles.
+// connection means the service is down. ICMP is measured separately.
 static BOOL ProbeTcpConnect(DWORD ipAddr, WORD port) {
     SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCKET) {
@@ -677,11 +783,13 @@ static void AppendDnsTipLine(WCHAR* tip, size_t cap, int slot, LPCWSTR label) {
     swprintf_s(tip + len, cap - len, L"\n%s %s %s", label, ipStr, mark);
 }
 
+static void AppendIcmpTipLine(WCHAR* tip, size_t cap, int slot);
 void AddOrUpdateTrayIcon(HWND hWnd, BOOL enabled, BOOL isAdd) {
     DnsOverall dns = GetDnsOverall();
     BOOL pending = (InterlockedOr(&g_isProcessingClick, 0) != 0);
 
-    HICON hNewIcon = CreateColoredDotIcon(enabled, dns, pending);
+    HICON hNewIcon = CreateColoredDotIcon(enabled, dns,
+        pending || !InterlockedOr(&g_networkStateKnown, 0));
     if (!hNewIcon) {
         Wh_Log(L"AddOrUpdateTrayIcon: CreateColoredDotIcon failed");
         return;
@@ -702,6 +810,8 @@ void AddOrUpdateTrayIcon(HWND hWnd, BOOL enabled, BOOL isAdd) {
         wsprintfW(nid.szTip, L"Net-Toggle: toggling\u2026");
     } else if (InterlockedOr(&g_isProcessingClick, 0) == 2) {
         wsprintfW(nid.szTip, L"Net-Toggle: refreshing\u2026");
+    } else if (!InterlockedOr(&g_networkStateKnown, 0)) {
+        wsprintfW(nid.szTip, L"Net-Toggle: adapter state unavailable");
     } else if (!enabled) {
         wsprintfW(nid.szTip, L"Net-Toggle: OFF (click to enable)");
     } else {
@@ -716,6 +826,8 @@ void AddOrUpdateTrayIcon(HWND hWnd, BOOL enabled, BOOL isAdd) {
         if (dns != DNS_NONE) {
             AppendDnsTipLine(nid.szTip, ARRAYSIZE(nid.szTip), 0, L"DNS1");
             AppendDnsTipLine(nid.szTip, ARRAYSIZE(nid.szTip), 1, L"DNS2");
+            AppendIcmpTipLine(nid.szTip, ARRAYSIZE(nid.szTip), 0);
+            AppendIcmpTipLine(nid.szTip, ARRAYSIZE(nid.szTip), 1);
         }
     }
 
@@ -766,32 +878,78 @@ DWORD WINAPI WorkerThreadProc(LPVOID lpParam) {
 
     Wh_Log(L"Toggling network adapters: %s", enable ? L"ENABLE" : L"DISABLE");
     LPCWSTR command = enable
-        ? L"Get-NetAdapter -Physical | Enable-NetAdapter -Confirm:$false"
-        : L"Get-NetAdapter -Physical | Disable-NetAdapter -Confirm:$false";
+        ? L"Get-NetAdapter -Physical -IncludeHidden | Enable-NetAdapter -Confirm:$false -ErrorAction Stop"
+        : L"Get-NetAdapter -Physical -IncludeHidden | Disable-NetAdapter -Confirm:$false -ErrorAction Stop";
 
-    BOOL success = RunPowerShellCommand(command, enable);
+    BOOL success = RunPowerShellCommand(command);
 
     if (success) {
-        success = TRUE;
+        if (enable)
+            InterlockedExchange((volatile LONG*)&g_enableGracePeriodUntilTick, GetTickCount() + 12000);
+        else
+            InterlockedExchange((volatile LONG*)&g_enableGracePeriodUntilTick, 0);
         Wh_Log(L"Network %s operation completed successfully", enable ? L"enable" : L"disable");
     } else {
         Wh_Log(L"Network toggle operation failed or cancelled");
         success = FALSE;
     }
 
-    InterlockedExchange(&g_isProcessingClick, 0);
+    BOOL actualState = CheckActualNetworkState();
+    InterlockedExchange(&g_networkIsUp, actualState ? 1 : 0);
 
     if (IsWindow(g_trayHwnd)) {
         PostMessageW(g_trayHwnd, WM_UPDATE_TRAY_STATE, (WPARAM)(InterlockedOr(&g_networkIsUp, 0) == 1), 0);
         // After a successful enable the NetWatch poll fallback may miss the state
-        // change (g_networkIsUp was already pre-set to 1 by RunPowerShellCommand).
+        // change after the completed command.
         // Trigger a recovery ping explicitly so DNS state updates promptly.
         if (success && enable && InterlockedOr(&g_networkIsUp, 0)) {
             PostMessageW(g_trayHwnd, WM_TRIGGER_PING, 0, 0);
         }
     }
     if (SUCCEEDED(hrCo)) CoUninitialize();
+    InterlockedExchange(&g_isProcessingClick, 0);
     return 0;
+}
+
+struct AdapterCommand { GUID id; bool enable; };
+
+static DWORD WINAPI AdapterWorkerThreadProc(LPVOID parameter) {
+    AdapterCommand command = *reinterpret_cast<AdapterCommand*>(parameter);
+    delete reinterpret_cast<AdapterCommand*>(parameter);
+    WCHAR guid[40] = {};
+    WCHAR script[512] = {};
+    bool valid = StringFromGUID2(command.id, guid, ARRAYSIZE(guid)) > 0 &&
+        SUCCEEDED(StringCchPrintfW(script, ARRAYSIZE(script),
+            L"$a=@(Get-NetAdapter -IncludeHidden | Where-Object {([guid]$_.InterfaceGuid) -eq [guid]'%s'}); "
+            L"if($a.Count -ne 1){throw 'Adapter missing or ambiguous'}; "
+            L"$a[0] | %s-NetAdapter -Confirm:$false -ErrorAction Stop",
+            guid, command.enable ? L"Enable" : L"Disable"));
+    bool success = valid && RunPowerShellCommand(script);
+    if (!success) Wh_Log(L"Per-adapter operation failed or was cancelled");
+    BOOL state = CheckActualNetworkState();
+    if (InterlockedOr(&g_networkStateKnown, 0)) InterlockedExchange(&g_networkIsUp, state ? 1 : 0);
+    HWND tray = (HWND)g_trayHwnd;
+    if (tray && IsWindow(tray)) {
+        PostMessageW(tray, WM_UPDATE_TRAY_STATE, (WPARAM)(InterlockedOr(&g_networkIsUp, 0) == 1), 0);
+        if (success) PostMessageW(tray, WM_TRIGGER_PING, 0, 0);
+    }
+    InterlockedExchange(&g_isProcessingClick, 0);
+    return 0;
+}
+
+static void ProcessAdapterCommand(const AdapterInfo& adapter) {
+    if (adapter.admin < 0 || InterlockedCompareExchange(&g_isProcessingClick, 1, 0) != 0) return;
+    AdapterCommand* command = new (std::nothrow) AdapterCommand{adapter.id, adapter.admin == 0};
+    if (!command) { InterlockedExchange(&g_isProcessingClick, 0); return; }
+    DWORD id = 0;
+    HANDLE thread = CreateThread(nullptr, 0, AdapterWorkerThreadProc, command, 0, &id);
+    if (!thread) {
+        delete command;
+        InterlockedExchange(&g_isProcessingClick, 0);
+        return;
+    }
+    HANDLE old = (HANDLE)InterlockedExchangePointer((PVOID*)&g_activeWorkerThread, thread);
+    if (old) CloseHandle(old);
 }
 
 DWORD WINAPI ResetWorkerThreadProc(LPVOID) {
@@ -802,38 +960,22 @@ DWORD WINAPI ResetWorkerThreadProc(LPVOID) {
     }
     Wh_Log(L"Executing network blackout reset (disable adapters → flush DNS → re-enable)");
 
-    // Full adapter cycle: kills all active connections, flushes DNS, restores adapters.
-    // ipconfig /release+renew omitted — adapter disable/enable already resets DHCP state.
-    // netsh winsock/ip reset excluded — they require a reboot to take effect.
-    WCHAR cmdArgs[] =
-        L"-NoProfile -NonInteractive -WindowStyle Hidden -Command \""
-        L"Get-NetAdapter -Physical | Disable-NetAdapter -Confirm:$false; "
-        L"Start-Sleep -Seconds 2; "
-        L"ipconfig /flushdns; "
-        L"Get-NetAdapter -Physical | Enable-NetAdapter -Confirm:$false\"";
-
-    SHELLEXECUTEINFOW sei = {sizeof(sei)};
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE;
-    sei.hwnd = nullptr;
-    sei.lpVerb = L"runas";
-    sei.lpFile = L"powershell.exe";
-    sei.lpParameters = cmdArgs;
-    sei.nShow = SW_HIDE;
-
-    BOOL resetOk = FALSE;
-    if (ShellExecuteExW(&sei)) {
-        if (sei.hProcess) {
-            WaitForSingleObject(sei.hProcess, POWERSHELL_TIMEOUT_MS);
-            CloseHandle(sei.hProcess);
-        }
-        Wh_Log(L"Network reset completed");
-        resetOk = TRUE;
-        InterlockedExchange(&g_networkIsUp, 1);
-    } else {
-        Wh_Log(L"Network reset failed to start or was cancelled");
-    }
-
-    InterlockedExchange(&g_isProcessingClick, 0);
+    // The elevated child restores exactly the initially enabled adapters,
+    // including when a disable or DNS flush fails.
+    LPCWSTR command =
+        L"$ids=@(Get-NetAdapter -Physical -IncludeHidden | Where-Object {$_.AdminStatus -eq 'Up'} | ForEach-Object {[string]$_.InterfaceGuid}); "
+        L"$restoreFailed=$false; try { "
+        L"foreach($id in $ids){ $a=Get-NetAdapter -Physical -IncludeHidden | Where-Object {[string]$_.InterfaceGuid -eq $id}; "
+        L"if(!$a){throw 'Adapter disappeared'}; $a | Disable-NetAdapter -Confirm:$false -ErrorAction Stop }; "
+        L"Start-Sleep -Seconds 2; ipconfig /flushdns | Out-Null; if($LASTEXITCODE -ne 0){throw 'DNS flush failed'} "
+        L"} finally { foreach($id in $ids){ try { $a=Get-NetAdapter -Physical -IncludeHidden | Where-Object {[string]$_.InterfaceGuid -eq $id}; "
+        L"if(!$a){throw 'Adapter missing'}; $a | Enable-NetAdapter -Confirm:$false -ErrorAction Stop "
+        L"} catch { $restoreFailed=$true; Write-Warning $_ } } }; if($restoreFailed){exit 1}";
+    BOOL resetOk = RunPowerShellCommand(command);
+    if (resetOk)
+        InterlockedExchange((volatile LONG*)&g_enableGracePeriodUntilTick, GetTickCount() + 15000);
+    BOOL actualState = CheckActualNetworkState();
+    InterlockedExchange(&g_networkIsUp, actualState ? 1 : 0);
     if (IsWindow(g_trayHwnd)) {
         PostMessageW(g_trayHwnd, WM_UPDATE_TRAY_STATE, (WPARAM)(InterlockedOr(&g_networkIsUp, 0) == 1), 0);
         if (resetOk && InterlockedOr(&g_networkIsUp, 0)) {
@@ -843,6 +985,7 @@ DWORD WINAPI ResetWorkerThreadProc(LPVOID) {
         }
     }
     if (SUCCEEDED(hrCo)) CoUninitialize();
+    InterlockedExchange(&g_isProcessingClick, 0);
     return 0;
 }
 
@@ -894,7 +1037,16 @@ void ProcessTrayClick() {
     }
     InterlockedExchange(&g_lastClickTime, now);
 
-    BOOL targetState = (InterlockedOr(&g_networkIsUp, 0) == 0);
+    BOOL current = CheckActualNetworkState();
+    if (!InterlockedOr(&g_networkStateKnown, 0)) {
+        InterlockedExchange(&g_isProcessingClick, 0);
+        if (g_trayHwnd && IsWindow(g_trayHwnd))
+            MessageBoxW(g_trayHwnd, L"Adapter state is unavailable. Try again after Windows finishes detecting adapters.",
+                        L"Net-Toggle", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    InterlockedExchange(&g_networkIsUp, current ? 1 : 0);
+    BOOL targetState = !current;
     Wh_Log(L"Processing network toggle click. Target state: %s", targetState ? L"ON" : L"OFF");
 
     // Show yellow immediately
@@ -917,12 +1069,88 @@ void ProcessTrayClick() {
 // DNS Ping Handler
 // ==============================================================================
 
+static IcmpResult ProbeIcmp(DWORD ip, int slot, LONG generation) {
+    IcmpResult result = {ip, generation, slot, -1, 0};
+    HANDLE handle = IcmpCreateFile();
+    if (handle == INVALID_HANDLE_VALUE) return result;
+    BYTE request[8] = {'N', 'e', 't', 'T', 'o', 'g', 'g', 'l'};
+    alignas(ICMP_ECHO_REPLY) BYTE reply[sizeof(ICMP_ECHO_REPLY) + sizeof(request) + 8] = {};
+    DWORD count = IcmpSendEcho(handle, ip, request, sizeof(request), nullptr,
+                               reply, sizeof(reply), 1000);
+    DWORD error = count ? NO_ERROR : GetLastError();
+    if (count > 0) {
+        const auto* echo = reinterpret_cast<const ICMP_ECHO_REPLY*>(reply);
+        result.status = echo->Status == IP_SUCCESS ? 1 : 0;
+        if (result.status == 1) result.rtt = echo->RoundTripTime;
+    } else if (error == IP_REQ_TIMED_OUT || error == IP_DEST_NET_UNREACHABLE ||
+               error == IP_DEST_HOST_UNREACHABLE || error == IP_DEST_PROT_UNREACHABLE ||
+               error == IP_DEST_PORT_UNREACHABLE) {
+        result.status = 0;
+    }
+    IcmpCloseHandle(handle);
+    return result;
+}
+
+static void AppendIcmpTipLine(WCHAR* tip, size_t cap, int slot) {
+    LONG ip = InterlockedOr(&g_dnsIp[slot], 0);
+    if (!ip || (slot == 1 && ip == InterlockedOr(&g_dnsIp[0], 0))) return;
+    IcmpHistory history;
+    AcquireSRWLockShared(&g_icmpLock);
+    history = g_icmpHistory[slot];
+    ReleaseSRWLockShared(&g_icmpLock);
+    if (history.ip != (DWORD)ip) return;
+    size_t len = wcslen(tip);
+    if (len + 35 >= cap) return;
+    if (history.status < 0) {
+        swprintf_s(tip + len, cap - len, L"\nICMP%d unavailable", slot + 1);
+        return;
+    }
+    int lost = 0;
+    for (int i = 0; i < history.count; i++) lost += history.samples[i];
+    if (history.status == 1)
+        swprintf_s(tip + len, cap - len, L"\nICMP%d %s%lums, loss %d/%d",
+                   slot + 1, history.rtt == 0 ? L"<" : L"", history.rtt == 0 ? 1UL : history.rtt,
+                   lost, history.count);
+    else
+        swprintf_s(tip + len, cap - len, L"\nICMP%d timeout, loss %d/%d", slot + 1, lost, history.count);
+}
+
+static void ResetIcmpHistory() {
+    AcquireSRWLockExclusive(&g_icmpLock);
+    g_icmpHistory[0] = IcmpHistory{};
+    g_icmpHistory[1] = IcmpHistory{};
+    ReleaseSRWLockExclusive(&g_icmpLock);
+}
+
+static void RecordIcmpResult(const IcmpResult& result) {
+    AcquireSRWLockExclusive(&g_icmpLock);
+    IcmpHistory& history = g_icmpHistory[result.slot];
+    if (history.ip != result.ip) history = IcmpHistory{};
+    history.ip = result.ip;
+    history.status = result.status;
+    history.rtt = result.rtt;
+    if (result.status >= 0) {
+        history.samples[history.next] = result.status == 1 ? 0 : 1;
+        history.next = (history.next + 1) % ARRAYSIZE(history.samples);
+        if (history.count < (int)ARRAYSIZE(history.samples)) history.count++;
+    }
+    ReleaseSRWLockExclusive(&g_icmpLock);
+}
+
 DWORD WINAPI DnsPingWorkerProc(LPVOID) {
+    LONG generation = InterlockedOr(&g_dnsGeneration, 0);
+    LONG networkGeneration = InterlockedOr(&g_networkGeneration, 0);
+    LONG ips[2] = {InterlockedOr(&g_dnsIp[0], 0), InterlockedOr(&g_dnsIp[1], 0)};
+    LONG methods[2] = {InterlockedOr(&g_dnsProbe[0], 0), InterlockedOr(&g_dnsProbe[1], 0)};
+    if ((generation & 1) || generation != InterlockedOr(&g_dnsGeneration, 0)) {
+        InterlockedExchange(&g_dnsWorkerRunning, 0);
+        return 0;
+    }
     // Probe each configured slot in priority order. Results publish per slot
     // so the tooltip can show ✓/✗ per server and GetDnsOverall() can derive
     // OK / DEGRADED / DOWN.
     for (int i = 0; i < 2; i++) {
-        LONG ip = InterlockedOr(&g_dnsIp[i], 0);
+        LONG ip = ips[i];
         if (ip == 0) {
             InterlockedExchange(&g_dnsUp[i], -1);
             continue;
@@ -932,8 +1160,25 @@ DWORD WINAPI DnsPingWorkerProc(LPVOID) {
         HANDLE hShutdown = (HANDLE)InterlockedCompareExchangePointer((PVOID*)&g_shutdownEvent, nullptr, nullptr);
         if (hShutdown && WaitForSingleObject(hShutdown, 0) == WAIT_OBJECT_0) break;
 
-        BOOL up = ProbeDnsServer((DWORD)ip, InterlockedOr(&g_dnsProbe[i], 0));
+        BOOL up = ProbeDnsServer((DWORD)ip, methods[i]);
+        if (generation != InterlockedOr(&g_dnsGeneration, 0) ||
+            networkGeneration != InterlockedOr(&g_networkGeneration, 0) ||
+            InterlockedOr(&g_networkIsUp, 0) == 0) break;
         InterlockedExchange(&g_dnsUp[i], up ? 1 : 0);
+    }
+
+    for (int i = 0; i < 2; i++) {
+        if (!ips[i] || (i == 1 && ips[1] == ips[0])) continue;
+        HANDLE stop = (HANDLE)InterlockedCompareExchangePointer((PVOID*)&g_shutdownEvent, nullptr, nullptr);
+        if (generation != InterlockedOr(&g_dnsGeneration, 0) ||
+            networkGeneration != InterlockedOr(&g_networkGeneration, 0) ||
+            InterlockedOr(&g_networkIsUp, 0) == 0 ||
+            (stop && WaitForSingleObject(stop, 0) == WAIT_OBJECT_0)) break;
+        IcmpResult value = ProbeIcmp((DWORD)ips[i], i, generation);
+        if (generation != InterlockedOr(&g_dnsGeneration, 0) ||
+            networkGeneration != InterlockedOr(&g_networkGeneration, 0) ||
+            InterlockedOr(&g_networkIsUp, 0) == 0) break;
+        RecordIcmpResult(value);
     }
 
     if (IsWindow(g_trayHwnd)) {
@@ -1002,6 +1247,7 @@ static void LoadDnsSlotSetting(int slot, LPCWSTR serverKey, LPCWSTR probeKey) {
 }
 
 static void LoadDnsSettings() {
+    InterlockedIncrement(&g_dnsGeneration);  // odd while the pair is changing
     LoadDnsSlotSetting(0, L"dnsServer", L"dnsProbe");
     LoadDnsSlotSetting(1, L"dnsServer2", L"dnsProbe2");
 
@@ -1020,6 +1266,7 @@ static void LoadDnsSettings() {
     int intervalSec = Wh_GetIntSetting(L"pingInterval");
     if (intervalSec < MIN_PING_INTERVAL_SEC) intervalSec = MIN_PING_INTERVAL_SEC;
     g_pingIntervalMs = (DWORD)intervalSec * 1000;
+    InterlockedIncrement(&g_dnsGeneration);
 }
 
 // ==============================================================================
@@ -1045,11 +1292,121 @@ static void ApplyContextMenuTheme(HWND hWnd, bool dark) {
     if (auto f = (Fn136)GetProcAddress(ux, MAKEINTRESOURCEA(136))) f();
 }
 
+static DWORD WINAPI WifiWorkerThreadProc(LPVOID lpParam) {
+    HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(hrCo) && hrCo != RPC_E_CHANGED_MODE) {
+        Wh_Log(L"WifiWorkerThread: CoInitializeEx failed (0x%X)", hrCo);
+        return 1;
+    }
+    BOOL enable = (BOOL)(UINT_PTR)lpParam;
+
+    Wh_Log(L"Toggling Wi-Fi adapters: %s", enable ? L"ENABLE" : L"DISABLE");
+    LPCWSTR command = enable
+        ? L"Get-NetAdapter -Physical -IncludeHidden | Where-Object { $_.PhysicalMediaType -eq 'Native 802.11' -or $_.MediaType -eq 'Native 802.11' -or $_.InterfaceDescription -match 'Wi-Fi|Wireless|802\\.11' -or $_.Name -match 'Wi-Fi|Wireless' } | Enable-NetAdapter -Confirm:$false -ErrorAction Stop"
+        : L"Get-NetAdapter -Physical -IncludeHidden | Where-Object { $_.PhysicalMediaType -eq 'Native 802.11' -or $_.MediaType -eq 'Native 802.11' -or $_.InterfaceDescription -match 'Wi-Fi|Wireless|802\\.11' -or $_.Name -match 'Wi-Fi|Wireless' } | Disable-NetAdapter -Confirm:$false -ErrorAction Stop";
+
+    BOOL success = RunPowerShellCommand(command);
+
+    if (success) {
+        if (enable)
+            InterlockedExchange((volatile LONG*)&g_enableGracePeriodUntilTick, GetTickCount() + 12000);
+        else
+            InterlockedExchange((volatile LONG*)&g_enableGracePeriodUntilTick, 0);
+        Wh_Log(L"Wi-Fi adapter %s operation completed successfully", enable ? L"enable" : L"disable");
+    } else {
+        Wh_Log(L"Wi-Fi adapter toggle operation failed or cancelled");
+    }
+
+    BOOL actualState = CheckActualNetworkState();
+    InterlockedExchange(&g_networkIsUp, actualState ? 1 : 0);
+
+    if (IsWindow(g_trayHwnd)) {
+        PostMessageW(g_trayHwnd, WM_UPDATE_TRAY_STATE, (WPARAM)(InterlockedOr(&g_networkIsUp, 0) == 1), 0);
+        if (success && enable && InterlockedOr(&g_networkIsUp, 0)) {
+            PostMessageW(g_trayHwnd, WM_TRIGGER_PING, 0, 0);
+        }
+    }
+    if (SUCCEEDED(hrCo)) CoUninitialize();
+    InterlockedExchange(&g_isProcessingClick, 0);
+    return 0;
+}
+
+static void ProcessWifiToggle(BOOL enable) {
+    if (InterlockedCompareExchange(&g_isProcessingClick, 1, 0) != 0) return;
+    Wh_Log(L"Processing Wi-Fi toggle click. Target state: %s", enable ? L"ENABLE" : L"DISABLE");
+
+    DWORD threadId = 0;
+    HANDLE hNewThread = CreateThread(nullptr, 0, WifiWorkerThreadProc, (LPVOID)(UINT_PTR)enable, 0, &threadId);
+    HANDLE hOldThread = (HANDLE)InterlockedExchangePointer((PVOID*)&g_activeWorkerThread, hNewThread);
+    if (hOldThread) {
+        CloseHandle(hOldThread);
+    }
+    if (!hNewThread) {
+        InterlockedExchange(&g_isProcessingClick, 0);
+    }
+}
+
+static HMENU g_activeAdapterMenu = nullptr;
+static std::vector<AdapterInfo> g_currentPhysicalAdapters;
+
 void ShowContextMenu(HWND hWnd) {
     HMENU hMenu = CreatePopupMenu();
-    BOOL netUp = (InterlockedOr(&g_networkIsUp, 0) == 1);
-    AppendMenuW(hMenu, MF_STRING, MENU_TOGGLE_NET,
-                netUp ? L"Disable Network" : L"Enable Network");
+    BOOL netUp = CheckActualNetworkState();
+    if (InterlockedOr(&g_networkStateKnown, 0)) InterlockedExchange(&g_networkIsUp, netUp ? 1 : 0);
+    AppendMenuW(hMenu, MF_STRING | (InterlockedOr(&g_networkStateKnown, 0) ? 0 : MF_GRAYED),
+                MENU_TOGGLE_NET, InterlockedOr(&g_networkStateKnown, 0) ?
+                (netUp ? L"Disable physical adapters" : L"Enable physical adapters") : L"Network state unavailable");
+
+    std::vector<AdapterInfo> adapters;
+    std::vector<AdapterInfo> physicalAdapters;
+    bool hasWifi = false;
+    bool wifiEnabled = false;
+    bool wifiKnown = false;
+
+    if (EnumerateAdapters(adapters)) {
+        for (const auto& a : adapters) {
+            if (a.physical) {
+                physicalAdapters.push_back(a);
+                if (a.isWifi) {
+                    hasWifi = true;
+                    if (a.admin == 1) wifiEnabled = true;
+                    if (a.admin >= 0) wifiKnown = true;
+                }
+            }
+        }
+
+        HMENU adapterMenu = CreatePopupMenu();
+        for (size_t i = 0; i < physicalAdapters.size() && i < 100; ++i) {
+            WCHAR label[180];
+            swprintf_s(label, L"%s  %s", physicalAdapters[i].admin < 0 ? L"[?]" :
+                physicalAdapters[i].admin ? L"[On]" : L"[Off]",
+                physicalAdapters[i].name[0] ? physicalAdapters[i].name : L"Unnamed adapter");
+            AppendMenuW(adapterMenu, MF_STRING | (physicalAdapters[i].admin < 0 ? MF_GRAYED : 0),
+                        MENU_ADAPTER_FIRST + (UINT)i, label);
+        }
+        if (physicalAdapters.empty()) {
+            AppendMenuW(adapterMenu, MF_STRING | MF_GRAYED, 0, L"No physical adapters found");
+        }
+        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)adapterMenu, L"Adapters");
+        g_activeAdapterMenu = adapterMenu;
+        g_currentPhysicalAdapters = physicalAdapters;
+    }
+
+    UINT wifiFlags = MF_STRING;
+    LPCWSTR wifiLabel = L"Disable Wifi Adapters";
+    if (!hasWifi) {
+        wifiFlags |= MF_GRAYED;
+        wifiLabel = L"No Wi-Fi adapters";
+    } else if (!wifiKnown) {
+        wifiFlags |= MF_GRAYED;
+        wifiLabel = L"Wi-Fi state unavailable";
+    } else if (wifiEnabled) {
+        wifiLabel = L"Disable Wifi Adapters";
+    } else {
+        wifiLabel = L"Enable Wifi Adapters";
+    }
+    AppendMenuW(hMenu, wifiFlags, MENU_TOGGLE_WIFI, wifiLabel);
+
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, MENU_NET_SETTINGS, L"Open Network Settings");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
@@ -1070,6 +1427,12 @@ void ShowContextMenu(HWND hWnd) {
         pt.x, pt.y, 0, hWnd, nullptr);
     PostMessageW(hWnd, WM_NULL, 0, 0);
     DestroyMenu(hMenu);
+    g_activeAdapterMenu = nullptr;
+
+    if (cmd >= MENU_ADAPTER_FIRST && cmd < MENU_ADAPTER_FIRST + (int)g_currentPhysicalAdapters.size()) {
+        ProcessAdapterCommand(g_currentPhysicalAdapters[cmd - MENU_ADAPTER_FIRST]);
+        return;
+    }
 
     switch (cmd) {
         case MENU_TOGGLE_NET:
@@ -1078,6 +1441,9 @@ void ShowContextMenu(HWND hWnd) {
         case MENU_NET_SETTINGS:
             ShellExecuteW(nullptr, L"open", L"ms-settings:network",
                           nullptr, nullptr, SW_SHOW);
+            break;
+        case MENU_TOGGLE_WIFI:
+            ProcessWifiToggle(!wifiEnabled);
             break;
         case MENU_OPEN_WINDHAWK: {
             SHELLEXECUTEINFOW sei = {sizeof(sei)};
@@ -1095,7 +1461,7 @@ void ShowContextMenu(HWND hWnd) {
 
 LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_TRAY_CALLBACK) {
-        if (LOWORD(lParam) == WM_LBUTTONUP) {
+        if (LOWORD(lParam) == WM_LBUTTONDBLCLK) {
             ProcessTrayClick();
         } else if (LOWORD(lParam) == WM_RBUTTONUP) {
             ShowContextMenu(hWnd);
@@ -1103,7 +1469,32 @@ LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             ProcessNetworkReset();
         }
         return 0;
+    } else if (msg == WM_INITMENUPOPUP) {
+        HMENU hPopup = (HMENU)wParam;
+        if (hPopup && hPopup == g_activeAdapterMenu && !HIWORD(lParam)) {
+            std::vector<AdapterInfo> freshAdapters;
+            if (EnumerateAdapters(freshAdapters)) {
+                g_currentPhysicalAdapters.clear();
+                for (const auto& a : freshAdapters) {
+                    if (a.physical) g_currentPhysicalAdapters.push_back(a);
+                }
+                for (size_t i = 0; i < g_currentPhysicalAdapters.size() && i < 100; ++i) {
+                    WCHAR label[180];
+                    swprintf_s(label, L"%s  %s", g_currentPhysicalAdapters[i].admin < 0 ? L"[?]" :
+                        g_currentPhysicalAdapters[i].admin ? L"[On]" : L"[Off]",
+                        g_currentPhysicalAdapters[i].name[0] ? g_currentPhysicalAdapters[i].name : L"Unnamed adapter");
+                    ModifyMenuW(hPopup, MENU_ADAPTER_FIRST + (UINT)i,
+                                MF_BYCOMMAND | MF_STRING | (g_currentPhysicalAdapters[i].admin < 0 ? MF_GRAYED : 0),
+                                MENU_ADAPTER_FIRST + (UINT)i, label);
+                }
+            }
+        }
+        return 0;
     } else if (msg == WM_UPDATE_TRAY_STATE) {
+        LONG state = wParam ? 1 : 0;
+        if (InterlockedExchange(&g_lastNotifiedNetworkState, state) != state)
+            InterlockedIncrement(&g_networkGeneration);
+        if (!wParam) ResetIcmpHistory();
         AddOrUpdateTrayIcon(hWnd, (BOOL)wParam, FALSE);
         return 0;
     } else if (msg == WM_TRIGGER_PING) {
@@ -1115,6 +1506,7 @@ LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     } else if (msg == WM_SETTINGS_CHANGED) {
         // Re-read settings on the tray thread
         LoadDnsSettings();
+        ResetIcmpHistory();
 
         KillTimer(hWnd, DNS_PING_TIMER_ID);
         if (AnyDnsConfigured()) {
@@ -1201,15 +1593,37 @@ DWORD WINAPI NetWatchThreadProc(LPVOID) {
             continue;
         }
 
+        if (nacRet == NO_ERROR) {
+            if (InterlockedOr(&g_isProcessingClick, 0) == 0) {
+                BOOL newState = CheckActualNetworkState();
+                InterlockedExchange(&g_networkIsUp, newState ? 1 : 0);
+                if (IsWindow(g_trayHwnd)) {
+                    PostMessageW(g_trayHwnd, WM_UPDATE_TRAY_STATE, (WPARAM)newState, 0);
+                    if (newState) PostMessageW(g_trayHwnd, WM_TRIGGER_PING, 0, 0);
+                }
+            }
+            HANDLE stop = (HANDLE)InterlockedCompareExchangePointer((PVOID*)&g_shutdownEvent, nullptr, nullptr);
+            if (stop && WaitForSingleObject(stop, 1000) == WAIT_OBJECT_0) break;
+            continue;
+        }
         HANDLE hSd = (HANDLE)InterlockedCompareExchangePointer((PVOID*)&g_shutdownEvent, nullptr, nullptr);
         HANDLE waits[2] = { hEvent, hSd };
-        DWORD r = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+        DWORD r = WAIT_TIMEOUT;
+        while (true) {
+            r = WaitForMultipleObjects(2, waits, FALSE, 5000);
+            if (r != WAIT_TIMEOUT) break;
+            HANDLE hCheck = (HANDLE)InterlockedCompareExchangePointer((PVOID*)&g_shutdownEvent, nullptr, nullptr);
+            if (hCheck && WaitForSingleObject(hCheck, 0) == WAIT_OBJECT_0) {
+                r = WAIT_OBJECT_0 + 1; // treat as shutdown
+                break;
+            }
+        }
 
         if (r == WAIT_OBJECT_0) {
             // Adapter state changed externally.
             // Skip while a toggle/reset is in flight — the worker owns g_networkIsUp
             // during that window and will post the definitive state when done.
-            CloseHandle(notifyHandle);
+            // NotifyAddrChange owns this handle; the event is ours.
             if (InterlockedOr(&g_isProcessingClick, 0) == 0) {
                 BOOL newState = CheckActualNetworkState();
                 InterlockedExchange(&g_networkIsUp, newState ? 1 : 0);
@@ -1222,9 +1636,10 @@ DWORD WINAPI NetWatchThreadProc(LPVOID) {
             }
         } else {
             // Shutdown signal
-            if (notifyHandle) {
+            if (nacRet == ERROR_IO_PENDING) {
                 CancelIPChangeNotify(&ov);
-                // The handle is automatically closed by the system, no need to CloseHandle
+                // Keep OVERLAPPED and its event alive until cancellation completes.
+                WaitForSingleObject(hEvent, INFINITE);
             }
             break;
         }
@@ -1530,7 +1945,7 @@ BOOL Wh_ModInit() {
     bool isToolModProcess = false;
     bool isCurrentToolModProcess = false;
     int argc;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
     if (!argv) {
         Wh_Log(L"CommandLineToArgvW failed");
         return FALSE;
@@ -1563,7 +1978,7 @@ BOOL Wh_ModInit() {
 
     if (isCurrentToolModProcess) {
         g_toolModProcessMutex =
-            CreateMutexW(nullptr, TRUE, L"windhawk-tool-mod_" WH_MOD_ID);
+            CreateMutex(nullptr, TRUE, L"windhawk-tool-mod_" WH_MOD_ID);
         if (!g_toolModProcessMutex) {
             Wh_Log(L"CreateMutex failed");
             ExitProcess(1);
@@ -1604,8 +2019,8 @@ void Wh_ModAfterInit() {
     }
 
     WCHAR currentProcessPath[MAX_PATH];
-    switch (GetModuleFileNameW(nullptr, currentProcessPath,
-                               ARRAYSIZE(currentProcessPath))) {
+    switch (GetModuleFileName(nullptr, currentProcessPath,
+                              ARRAYSIZE(currentProcessPath))) {
         case 0:
         case ARRAYSIZE(currentProcessPath):
             Wh_Log(L"GetModuleFileName failed");
@@ -1618,9 +2033,9 @@ void Wh_ModAfterInit() {
     swprintf_s(commandLine, L"\"%s\" -tool-mod \"%s\"", currentProcessPath,
                WH_MOD_ID);
 
-    HMODULE kernelModule = GetModuleHandleW(L"kernelbase.dll");
+    HMODULE kernelModule = GetModuleHandle(L"kernelbase.dll");
     if (!kernelModule) {
-        kernelModule = GetModuleHandleW(L"kernel32.dll");
+        kernelModule = GetModuleHandle(L"kernel32.dll");
         if (!kernelModule) {
             Wh_Log(L"No kernelbase.dll/kernel32.dll");
             return;
@@ -1643,8 +2058,8 @@ void Wh_ModAfterInit() {
         return;
     }
 
-    STARTUPINFOW si{
-        .cb = sizeof(STARTUPINFOW),
+    STARTUPINFO si{
+        .cb = sizeof(STARTUPINFO),
         .dwFlags = STARTF_FORCEOFFFEEDBACK,
     };
     PROCESS_INFORMATION pi;
